@@ -2,7 +2,9 @@
 name = "dropcut"
 version = "0.1.0"
 description = "Free, private, local-first video editing"
-authors = ["DropCut contributors"]
+authors = ["IK-Lv7"]
+license = "MIT"
+repository = "https://github.com/IK-Lv7/DropCut"
 edition = "2021"
 
 [lib]

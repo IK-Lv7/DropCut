@@ -1,6 +1,6 @@
 # Third-party notices
 
-This is an early development version created before the DropCut project license is finalized. Before public distribution, this document and the packaged license files must receive a complete legal review covering all dependencies, fonts, icons, codecs, and AI models.
+DropCut itself is released under the MIT License (see `LICENSE`). It uses and redistributes the third-party software and models below under their own licenses. Dependency versions are pinned in `package-lock.json` and `src-tauri/Cargo.lock`; the full list of transitive Rust and npm licenses can be generated with `cargo license` and `npx license-checker`.
 
 Current primary dependencies:
 
@@ -18,6 +18,8 @@ Current primary dependencies:
 
 Windows release preparation downloads a checksum-pinned FFmpeg archive and compiles whisper.cpp from its pinned upstream tag. Their upstream license files are copied into the packaged `licenses` resource directory. Development builds can instead use compatible executables installed on `PATH`.
 
-The selected FFmpeg package is a GPL build. Public distribution therefore requires DropCut's complete corresponding-source and license obligations to be satisfied. The automated build is technical packaging infrastructure, not a substitute for that compliance review.
+### FFmpeg (GPL) and source availability
 
-Optional converted Whisper GGML model files are downloaded from the `ggerganov/whisper.cpp` Hugging Face repository, which identifies the repository license as MIT. Model license and attribution requirements must be reviewed again before distribution.
+The Windows installer bundles an unmodified BtbN `win64-gpl` FFmpeg 8.1.3 build and runs it as a separate program (DropCut only starts it with command-line arguments; it is not linked into DropCut). FFmpeg's license text is packaged in the `licenses` directory. The corresponding FFmpeg source is available from https://ffmpeg.org/releases/ (tag `n8.1.3`) and from the build recipe repository https://github.com/BtbN/FFmpeg-Builds (release `autobuild-2026-09-22-13-18`). Anyone redistributing the installer must keep these notices and offer the same source access.
+
+Optional converted Whisper GGML model files are downloaded from the `ggerganov/whisper.cpp` Hugging Face repository, which identifies the repository license as MIT. Their license and attribution requirements are not covered by DropCut's MIT license; check the model card before redistributing a model.
