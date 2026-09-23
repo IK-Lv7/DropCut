@@ -1,0 +1,12 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+*.log
+.DS_Store
+src-tauri/resources/tools/*
+!src-tauri/resources/tools/README.md
+src-tauri/resources/licenses/generated/
+src-tauri/resources/llm/*
+!src-tauri/resources/llm/README.md
+whisper.cpp/
