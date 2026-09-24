@@ -10,3 +10,5 @@ src-tauri/resources/licenses/generated/
 src-tauri/resources/llm/*
 !src-tauri/resources/llm/README.md
 whisper.cpp/
+*.exe
+*.msi
