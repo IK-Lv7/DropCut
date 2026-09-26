@@ -9,6 +9,7 @@ Current primary dependencies:
 - Vite (MIT)
 - Lucide (ISC)
 - whisper.cpp v1.9.4 (MIT, built from source for Windows packages)
+- Silero VAD v5.1.2, GGML conversion `ggml-silero-v5.1.2.bin` from `ggml-org/whisper-vad` (MIT), embedded in the app to skip non-speech before transcription
 - llama.cpp b11140 (MIT, official prebuilt Windows CPU binaries, checksum-pinned)
 - Qwen2.5-1.5B-Instruct Q4_K_M GGUF (Apache-2.0, bundled ~1.1 GB, checksum-pinned; license at `resources/licenses/Qwen2.5-LICENSE.txt`)
 - FFmpeg 8.1.3 BtbN `win64-gpl-8.1` static build (GPL and applicable component licenses)

@@ -662,6 +662,27 @@ fn validated_language(language: &str) -> Result<&str, String> {
     }
 }
 
+/// Gentle cleanup so quiet or rumbly speech is easier for whisper to pick up.
+const SPEECH_AUDIO_FILTER: &str = "highpass=f=80,dynaudnorm=f=150:g=15";
+const VAD_MODEL: &[u8] = include_bytes!("../resources/models/ggml-silero-v5.1.2.bin");
+
+/// Accuracy-oriented whisper options shared by subtitle and transcript runs:
+/// beam search, no context carry-over (stops repeated hallucinations), and
+/// Silero VAD so silence and background noise are not transcribed.
+async fn add_accuracy_args(
+    command: &mut tokio::process::Command,
+    work_dir: &Path,
+) -> Result<(), String> {
+    let vad_path = work_dir.join("vad.bin");
+    tokio::fs::write(&vad_path, VAD_MODEL)
+        .await
+        .map_err(|error| friendly_error(&error.to_string()))?;
+    command
+        .args(["-bs", "5", "-mc", "0", "--vad", "-vm"])
+        .arg(&vad_path);
+    Ok(())
+}
+
 /// Writes 16 kHz mono PCM for whisper, optionally only the kept sections.
 async fn extract_audio_wav(
     ffmpeg: &Path,
@@ -673,7 +694,7 @@ async fn extract_audio_wav(
     let mut extract = tools::command(ffmpeg);
     extract.args(["-hide_banner", "-y", "-i"]).arg(input);
     if keep_ranges.is_empty() {
-        extract.arg("-vn");
+        extract.args(["-vn", "-af", SPEECH_AUDIO_FILTER]);
     } else {
         let mut filters = Vec::with_capacity(keep_ranges.len() + 1);
         let mut inputs = String::new();
@@ -685,7 +706,7 @@ async fn extract_audio_wav(
             inputs.push_str(&format!("[a{index}]"));
         }
         filters.push(format!(
-            "{inputs}concat=n={}:v=0:a=1[cut_audio]",
+            "{inputs}concat=n={}:v=0:a=1,{SPEECH_AUDIO_FILTER}[cut_audio]",
             keep_ranges.len()
         ));
         extract.args(["-filter_complex", &filters.join(";"), "-map", "[cut_audio]"]);
@@ -775,6 +796,10 @@ async fn create_subtitles(
         .arg(&audio_path)
         .args(["-l", language, "-osrt", "-of"])
         .arg(&output_base);
+    if let Err(error) = add_accuracy_args(&mut transcribe, &work_dir).await {
+        let _ = tokio::fs::remove_dir_all(&work_dir).await;
+        return Err(error);
+    }
     let transcription_result = match run_cancelable(&mut transcribe, cancelled).await {
         Ok(result) => result,
         Err(error) => {
@@ -937,7 +962,7 @@ async fn analyze_loudness(
             inputs.push_str(&format!("[a{index}]"));
         }
         graph.push(format!(
-            "{inputs}concat=n={}:v=0:a=1[cut_audio]",
+            "{inputs}concat=n={}:v=0:a=1,{SPEECH_AUDIO_FILTER}[cut_audio]",
             keep_ranges.len()
         ));
         graph.push(format!("[cut_audio]{loudnorm}[analysis_audio]"));
@@ -1793,6 +1818,7 @@ async fn transcribe_words(
         if let Some(prompt) = filler_prompt(language) {
             transcribe.args(["--prompt", prompt]);
         }
+        add_accuracy_args(&mut transcribe, &work_dir).await?;
         match run_cancelable(&mut transcribe, cancelled).await? {
             ProcessResult::Cancelled => return Ok(None),
             ProcessResult::Completed(status) if !status.success() => {

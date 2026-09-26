@@ -21,7 +21,7 @@ struct ModelSpec {
     recommended: bool,
 }
 
-const MODELS: [ModelSpec; 4] = [
+const MODELS: [ModelSpec; 5] = [
     ModelSpec {
         id: "tiny",
         name: "Whisper Tiny",
@@ -38,7 +38,7 @@ const MODELS: [ModelSpec; 4] = [
         description: "Balanced speed and accuracy",
         size_bytes: 147_951_465,
         sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
-        recommended: true,
+        recommended: false,
     },
     ModelSpec {
         id: "small",
@@ -57,6 +57,15 @@ const MODELS: [ModelSpec; 4] = [
         size_bytes: 1_533_763_059,
         sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
         recommended: false,
+    },
+    ModelSpec {
+        id: "large-v3-turbo",
+        name: "Whisper Large v3 Turbo",
+        filename: "ggml-large-v3-turbo-q5_0.bin",
+        description: "Best accuracy for Japanese, compressed (q5_0)",
+        size_bytes: 574_041_195,
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        recommended: true,
     },
 ];
 
