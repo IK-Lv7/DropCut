@@ -1,6 +1,12 @@
 <h1 align="center">DropCut</h1>
-<p align="center"><b>Drop a video. Let your PC cut it.</b><br>
-A free, open-source AI video editor that runs 100% on your computer.<br>
+<p align="center"><b>Drop a video. Let your PC cut it.</b></p>
+
+<p align="center">
+  <a href="https://github.com/IK-Lv7/DropCut/releases/latest"><img alt="Download for Windows" src="https://img.shields.io/badge/%E2%AC%87%20Download%20for%20Windows-installer-2ea44f?style=for-the-badge&logo=windows&logoColor=white"></a>
+</p>
+<p align="center"><sub>Free · No account · Runs offline · Windows 10/11 (64-bit)</sub></p>
+
+<p align="center">A free, open-source AI video editor that runs 100% on your computer.<br>
 No subscription. No watermark. No upload. No account.</p>
 
 <p align="center">
@@ -44,6 +50,14 @@ Most "AI video tools" ask you to upload your footage, pay monthly, and export wi
 | Source code | Open (MIT) | Closed |
 
 ## Get started
+
+<p align="center">
+  <a href="https://github.com/IK-Lv7/DropCut/releases/latest"><img alt="Download for Windows" src="https://img.shields.io/badge/%E2%AC%87%20Download%20for%20Windows-installer-2ea44f?style=for-the-badge&logo=windows&logoColor=white"></a>
+</p>
+
+1. Click **Download**, then grab `DropCut_x.y.z_x64-setup.exe` from the latest release.
+2. Run the installer. If SmartScreen warns you, click **More info → Run anyway** (the installer is not code-signed yet).
+3. Open DropCut and drop a video onto the window.
 
 **Windows:** installers are built by GitHub Actions; see the [*Windows build*](https://github.com/IK-Lv7/DropCut/actions/workflows/windows.yml) workflow. The installer is not code-signed yet, so SmartScreen may warn on first launch. It bundles FFmpeg, whisper.cpp, llama.cpp and a ~1.1 GB local AI model ([notices](THIRD_PARTY_NOTICES.md)).
 
@@ -92,6 +106,12 @@ Bug reports, ideas and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBU
 **動画をドロップするだけ。編集はPCがやります。**
 
 DropCut は、完全にローカルで動く無料のオープンソース AI 動画編集アプリです。サブスクなし、ウォーターマークなし、アップロードなし、アカウントなし。動画は PC の外に出ません。
+
+<p align="center">
+  <a href="https://github.com/IK-Lv7/DropCut/releases/latest"><img alt="Windows 版をダウンロード" src="https://img.shields.io/badge/%E2%AC%87%20Windows%E7%89%88%E3%82%92%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89-installer-2ea44f?style=for-the-badge&logo=windows&logoColor=white"></a>
+</p>
+
+**インストール方法:** 上のボタンから最新の `setup.exe` をダウンロードして実行。SmartScreen の警告が出たら「詳細情報 → 実行」を選んでください（まだコード署名していません）。
 
 - **ワンボタン書き出し**: YouTube、Shorts/TikTok、Discord、X など用途に合わせて出力
 - **自動字幕**: ローカルの Whisper で日本語・英語などに対応。6種類のデザイン

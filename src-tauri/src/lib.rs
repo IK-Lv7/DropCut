@@ -670,16 +670,19 @@ const VAD_MODEL: &[u8] = include_bytes!("../resources/models/ggml-silero-v5.1.2.
 /// beam search, no context carry-over (stops repeated hallucinations), and
 /// Silero VAD so silence and background noise are not transcribed.
 async fn add_accuracy_args(
-    command: &mut tokio::process::Command,
+    command: &mut Command,
     work_dir: &Path,
+    use_vad: bool,
 ) -> Result<(), String> {
+    command.args(["-bs", "5", "-mc", "0"]);
+    if !use_vad {
+        return Ok(());
+    }
     let vad_path = work_dir.join("vad.bin");
     tokio::fs::write(&vad_path, VAD_MODEL)
         .await
         .map_err(|error| friendly_error(&error.to_string()))?;
-    command
-        .args(["-bs", "5", "-mc", "0", "--vad", "-vm"])
-        .arg(&vad_path);
+    command.args(["--vad", "-vm"]).arg(&vad_path);
     Ok(())
 }
 
@@ -788,15 +791,19 @@ async fn create_subtitles(
             return Err("Unsupported transcription language.".into());
         }
     };
+    let subtitle_path = output_base.with_extension("srt");
+    // VAD can classify a quiet or noisy recording as all non-speech; retry without it.
+    for use_vad in [true, false] {
+    let _ = tokio::fs::remove_file(&subtitle_path).await;
     let mut transcribe = tools::command(&whisper);
     transcribe
         .args(["-m"])
-        .arg(model)
+        .arg(&model)
         .args(["-f"])
         .arg(&audio_path)
         .args(["-l", language, "-osrt", "-of"])
         .arg(&output_base);
-    if let Err(error) = add_accuracy_args(&mut transcribe, &work_dir).await {
+    if let Err(error) = add_accuracy_args(&mut transcribe, &work_dir, use_vad).await {
         let _ = tokio::fs::remove_dir_all(&work_dir).await;
         return Err(error);
     }
@@ -820,7 +827,6 @@ async fn create_subtitles(
         }
         ProcessResult::Completed(_) => {}
     }
-    let subtitle_path = output_base.with_extension("srt");
     let metadata = match tokio::fs::metadata(&subtitle_path).await {
         Ok(metadata) => metadata,
         Err(_) => {
@@ -830,9 +836,14 @@ async fn create_subtitles(
         }
     };
     if metadata.len() == 0 {
+        if use_vad {
+            continue;
+        }
         let _ = tokio::fs::remove_file(&subtitle_path).await;
         let _ = tokio::fs::remove_dir_all(&work_dir).await;
         return Err("whisper-cli produced an empty SRT file.".into());
+    }
+    break;
     }
     let _ = tokio::fs::remove_dir_all(&work_dir).await;
     Ok(SubtitleResult::Created(subtitle_path))
@@ -1818,7 +1829,7 @@ async fn transcribe_words(
         if let Some(prompt) = filler_prompt(language) {
             transcribe.args(["--prompt", prompt]);
         }
-        add_accuracy_args(&mut transcribe, &work_dir).await?;
+        add_accuracy_args(&mut transcribe, &work_dir, true).await?;
         match run_cancelable(&mut transcribe, cancelled).await? {
             ProcessResult::Cancelled => return Ok(None),
             ProcessResult::Completed(status) if !status.success() => {
