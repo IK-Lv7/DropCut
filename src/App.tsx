@@ -78,6 +78,7 @@ export default function App() {
   const [transcriptEditEnabled, setTranscriptEditEnabled] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptWord[] | null>(null);
   const [removedWords, setRemovedWords] = useState<Set<number>>(new Set());
+  const [wordDrag, setWordDrag] = useState<{ start: number; remove: boolean } | null>(null);
   const [highlightEnabled, setHighlightEnabled] = useState(false);
   const [highlightLength, setHighlightLength] = useState(30);
   const [highlightCount, setHighlightCount] = useState(3);
@@ -131,6 +132,13 @@ export default function App() {
     setPickedHighlights(new Set());
     setHighlightThumbnails({});
   }, [video?.path]);
+
+  useEffect(() => {
+    if (!wordDrag) return;
+    const endDrag = () => setWordDrag(null);
+    window.addEventListener("mouseup", endDrag);
+    return () => window.removeEventListener("mouseup", endDrag);
+  }, [wordDrag]);
 
   const wordCuts = useMemo<CutRange[]>(() => {
     if (!transcriptEditEnabled || !transcript) return [];
@@ -406,12 +414,29 @@ export default function App() {
     setShortsNote(notes.join(" "));
   };
 
-  const toggleWord = (index: number) => {
+  const applyWordRange = (from: number, to: number, remove: boolean) => {
+    const [lo, hi] = from <= to ? [from, to] : [to, from];
     setRemovedWords((current) => {
       const next = new Set(current);
-      if (!next.delete(index)) next.add(index);
+      for (let index = lo; index <= hi; index += 1) {
+        if (remove) next.add(index);
+        else next.delete(index);
+      }
       return next;
     });
+  };
+
+  // Mousedown toggles the clicked word and starts a drag; dragging across
+  // more words extends the same add/remove so a sentence can be cut in one stroke.
+  const startWordDrag = (index: number) => {
+    const remove = !removedWords.has(index);
+    setWordDrag({ start: index, remove });
+    applyWordRange(index, index, remove);
+  };
+
+  const continueWordDrag = (index: number) => {
+    if (!wordDrag) return;
+    applyWordRange(wordDrag.start, index, wordDrag.remove);
   };
 
   const applySilenceStrength = (strength: "weak" | "normal" | "strong") => {
@@ -563,13 +588,14 @@ export default function App() {
                           className={`word ${word.filler ? `filler-${word.filler}` : ""} ${removedWords.has(index) ? "removed" : ""}`}
                           title={`${word.start.toFixed(2)}s – ${word.end.toFixed(2)}s`}
                           disabled={processing}
-                          onClick={() => toggleWord(index)}
+                          onMouseDown={(event) => { event.preventDefault(); startWordDrag(index); }}
+                          onMouseEnter={() => continueWordDrag(index)}
                         >{word.text}</button>
                         {/^[\x00-\x7F]/.test(word.text) ? " " : null}
                       </Fragment>
                     ))}
                   </div>
-                  <p>Click a word to remove or restore it. Red-highlighted words are hesitations; amber ones can be real speech, so they start unchecked.</p>
+                  <p>Click a word, or drag across several, to remove or restore them — like editing text. Red-highlighted words are hesitations; amber ones can be real speech, so they start unchecked.</p>
                 </>
               )}
             </div>

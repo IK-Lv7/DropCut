@@ -1228,6 +1228,162 @@ fn build_video_args(
     Ok(args)
 }
 
+/// Rewrites software encoder args produced by `build_video_args` to use a
+/// GPU encoder instead. `-crf` has no equivalent flag across GPU vendors, so
+/// each branch maps it to that encoder's own quality-rate-control flags.
+fn apply_hw_encoder(args: &mut Vec<String>, hw: tools::HwEncoder, codec: &str) {
+    if let Some(pos) = args.iter().position(|a| a == "-c:v") {
+        if let Some(value) = args.get_mut(pos + 1) {
+            *value = hw.encoder_name(codec).to_string();
+        }
+    }
+    if hw == tools::HwEncoder::Amf {
+        if let Some(pos) = args.iter().position(|a| a == "-preset") {
+            args.splice(pos..pos + 2, ["-quality".to_string(), "balanced".to_string()]);
+        }
+    }
+    if let Some(pos) = args.iter().position(|a| a == "-crf") {
+        match hw {
+            tools::HwEncoder::Nvenc => {
+                let value = args[pos + 1].clone();
+                args.splice(
+                    pos..pos + 2,
+                    ["-rc:v".to_string(), "vbr".to_string(), "-cq".to_string(), value],
+                );
+            }
+            tools::HwEncoder::Qsv => {
+                args[pos] = "-global_quality".to_string();
+            }
+            tools::HwEncoder::Amf => {
+                let value = args[pos + 1].clone();
+                args.splice(
+                    pos..pos + 2,
+                    [
+                        "-rc".to_string(),
+                        "cqp".to_string(),
+                        "-qp_i".to_string(),
+                        value.clone(),
+                        "-qp_p".to_string(),
+                        value,
+                    ],
+                );
+            }
+            tools::HwEncoder::VideoToolbox => {
+                args[pos] = "-q:v".to_string();
+            }
+        }
+    }
+}
+
+enum EncodeOutcome {
+    Success,
+    Cancelled,
+    /// Carries the last reported progress percent, for the caller's error message.
+    Failed(f64),
+}
+
+/// Runs one FFmpeg encode attempt and reports progress. A GPU encoder can
+/// fail the moment it's actually used (wrong driver, VRAM limits, etc. are
+/// invisible to `cached_hw_encoder`'s own quick probe), so this returns
+/// `Failed` rather than erroring outright, letting the caller retry on CPU.
+async fn run_ffmpeg_encode(
+    app: &AppHandle,
+    jobs: &JobManager,
+    job_id: &str,
+    ffmpeg: &Path,
+    input: &Path,
+    video_args: &[String],
+    temp: &Path,
+    subtitle_temp: &Option<PathBuf>,
+    output_duration: f64,
+    preprocessing_percent: f64,
+    cancelled: &AtomicBool,
+) -> Result<EncodeOutcome, String> {
+    let mut command = tools::command(ffmpeg);
+    command
+        .args([
+            "-hide_banner",
+            "-y",
+            "-nostats",
+            "-progress",
+            "pipe:2",
+            "-i",
+        ])
+        .arg(input);
+    command.current_dir(temp.parent().unwrap_or_else(|| Path::new(".")));
+    command.args(video_args);
+    command
+        .arg(temp)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            jobs.0.lock().ok().map(|mut map| map.remove(job_id));
+            return Err(friendly_error(&error.to_string()));
+        }
+    };
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| friendly_error("FFmpeg stderr unavailable"))?;
+    let mut lines = BufReader::new(stderr).lines();
+    let mut last_percent = preprocessing_percent;
+    loop {
+        if cancelled.load(Ordering::Relaxed) {
+            let _ = child.kill().await;
+            let _ = tokio::fs::remove_file(temp).await;
+            if let Some(path) = subtitle_temp {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+            emit_progress(
+                app,
+                job_id,
+                "cancelled",
+                last_percent,
+                "Processing cancelled",
+                None,
+            );
+            jobs.0.lock().ok().map(|mut map| map.remove(job_id));
+            return Ok(EncodeOutcome::Cancelled);
+        }
+        tokio::select! {
+            line = lines.next_line() => match line {
+                Ok(Some(text)) => if let Some(elapsed) = parse_ffmpeg_time(&text) {
+                    let start = preprocessing_percent + 1.0;
+                    let percent = (elapsed / output_duration.max(1.0) * (97.0 - start) + start).clamp(last_percent, 97.0);
+                    if percent - last_percent >= 0.3 { last_percent = percent; emit_progress(app, job_id, "encoding", percent, "Encoding video", None); }
+                },
+                Ok(None) => break,
+                Err(error) => { eprintln!("[DropCut] Failed to read FFmpeg output: {error}"); break; }
+            },
+            _ = sleep(Duration::from_millis(150)) => {}
+        }
+    }
+    let status = match child.wait().await {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(temp).await;
+            if let Some(path) = subtitle_temp {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+            jobs.0.lock().ok().map(|mut map| map.remove(job_id));
+            return Err(friendly_error(&error.to_string()));
+        }
+    };
+    if status.success() {
+        Ok(EncodeOutcome::Success)
+    } else {
+        Ok(EncodeOutcome::Failed(last_percent))
+    }
+}
+
 #[tauri::command]
 async fn start_export(
     app: AppHandle,
@@ -1548,45 +1704,53 @@ async fn run_export(
     let ffmpeg = tools::resolve(&app, Tool::Ffmpeg)
         .await
         .ok_or_else(|| "FFmpeg is not bundled and was not found on PATH.".to_string())?;
-    let mut command = tools::command(&ffmpeg);
-    command
-        .args([
-            "-hide_banner",
-            "-y",
-            "-nostats",
-            "-progress",
-            "pipe:2",
-            "-i",
-        ])
-        .arg(&input);
-    command.current_dir(output.parent().unwrap_or_else(|| Path::new(".")));
-    command.args(video_args);
-    command
-        .arg(&temp)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            jobs.0.lock().ok().map(|mut map| map.remove(&job_id));
-            return Err(friendly_error(&error.to_string()));
+    let hw_encoder = tools::cached_hw_encoder(&ffmpeg).await;
+    let software_args = video_args.clone();
+    let first_attempt_args = match hw_encoder {
+        Some(hw) => {
+            let mut args = video_args;
+            apply_hw_encoder(&mut args, hw, &settings.codec);
+            args
         }
+        None => video_args,
     };
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| friendly_error("FFmpeg stderr unavailable"))?;
-    let mut lines = BufReader::new(stderr).lines();
-    let mut last_percent = preprocessing_percent;
-    loop {
-        if cancelled.load(Ordering::Relaxed) {
-            let _ = child.kill().await;
+    let mut outcome = run_ffmpeg_encode(
+        &app,
+        jobs,
+        &job_id,
+        &ffmpeg,
+        &input,
+        &first_attempt_args,
+        &temp,
+        &subtitle_temp,
+        output_duration,
+        preprocessing_percent,
+        &cancelled,
+    )
+    .await?;
+    if hw_encoder.is_some() {
+        if let EncodeOutcome::Failed(_) = outcome {
+            eprintln!("[DropCut] GPU encoding failed, falling back to CPU encoding");
+            outcome = run_ffmpeg_encode(
+                &app,
+                jobs,
+                &job_id,
+                &ffmpeg,
+                &input,
+                &software_args,
+                &temp,
+                &subtitle_temp,
+                output_duration,
+                preprocessing_percent,
+                &cancelled,
+            )
+            .await?;
+        }
+    }
+    match outcome {
+        EncodeOutcome::Cancelled => return Ok(String::new()),
+        EncodeOutcome::Failed(last_percent) => {
+            jobs.0.lock().ok().map(|mut map| map.remove(&job_id));
             let _ = tokio::fs::remove_file(&temp).await;
             if let Some(path) = &subtitle_temp {
                 let _ = tokio::fs::remove_file(path).await;
@@ -1594,53 +1758,16 @@ async fn run_export(
             emit_progress(
                 &app,
                 &job_id,
-                "cancelled",
+                "error",
                 last_percent,
-                "Processing cancelled",
+                "Video export failed",
                 None,
             );
+            return Err("Video export failed. Change the settings or try another video.".into());
+        }
+        EncodeOutcome::Success => {
             jobs.0.lock().ok().map(|mut map| map.remove(&job_id));
-            return Ok(String::new());
         }
-        tokio::select! {
-            line = lines.next_line() => match line {
-                Ok(Some(text)) => if let Some(elapsed) = parse_ffmpeg_time(&text) {
-                    let start = preprocessing_percent + 1.0;
-                    let percent = (elapsed / output_duration.max(1.0) * (97.0 - start) + start).clamp(last_percent, 97.0);
-                    if percent - last_percent >= 0.3 { last_percent = percent; emit_progress(&app, &job_id, "encoding", percent, "Encoding video", None); }
-                },
-                Ok(None) => break,
-                Err(error) => { eprintln!("[DropCut] Failed to read FFmpeg output: {error}"); break; }
-            },
-            _ = sleep(Duration::from_millis(150)) => {}
-        }
-    }
-    let status = match child.wait().await {
-        Ok(status) => status,
-        Err(error) => {
-            let _ = tokio::fs::remove_file(&temp).await;
-            if let Some(path) = &subtitle_temp {
-                let _ = tokio::fs::remove_file(path).await;
-            }
-            jobs.0.lock().ok().map(|mut map| map.remove(&job_id));
-            return Err(friendly_error(&error.to_string()));
-        }
-    };
-    jobs.0.lock().ok().map(|mut map| map.remove(&job_id));
-    if !status.success() {
-        let _ = tokio::fs::remove_file(&temp).await;
-        if let Some(path) = &subtitle_temp {
-            let _ = tokio::fs::remove_file(path).await;
-        }
-        emit_progress(
-            &app,
-            &job_id,
-            "error",
-            last_percent,
-            "Video export failed",
-            None,
-        );
-        return Err("Video export failed. Change the settings or try another video.".into());
     }
     emit_progress(&app, &job_id, "verifying", 98.0, "Verifying output", None);
     let temp_meta = tokio::fs::metadata(&temp)
