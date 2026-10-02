@@ -61,7 +61,7 @@ Most "AI video tools" ask you to upload your footage, pay monthly, and export wi
 
 **Windows:** installers are built by GitHub Actions; see the [*Windows build*](https://github.com/IK-Lv7/DropCut/actions/workflows/windows.yml) workflow. The installer is not code-signed yet, so SmartScreen may warn on first launch. It bundles FFmpeg, whisper.cpp, llama.cpp and a ~1.1 GB local AI model ([notices](THIRD_PARTY_NOTICES.md)).
 
-**Build from source:** you need Node.js 20+, Rust stable, the [Tauri prerequisites](https://tauri.app/start/prerequisites/), and FFmpeg/FFprobe on `PATH` (plus `whisper-cli` for subtitles).
+**Build from source:** you need Node.js 20+, Rust stable 1.78+ (the `Cargo.lock` format needs it; install via [rustup](https://rustup.rs) to stay current), the [Tauri prerequisites](https://tauri.app/start/prerequisites/), and FFmpeg/FFprobe on `PATH` (plus `whisper-cli` for subtitles).
 
 ```bash
 git clone https://github.com/IK-Lv7/DropCut.git

@@ -8,43 +8,26 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
-    runs-on: windows-latest
-    timeout-minutes: 60
+    uses: ./.github/workflows/windows.yml
 
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
         with:
-          node-version: 24
-          cache: npm
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Test frontend build
-        run: npm run build
-
-      - name: Test Rust backend
-        working-directory: src-tauri
-        run: cargo test --locked
-
-      - name: Prepare pinned local processing tools
-        shell: pwsh
-        run: ./scripts/prepare-windows-tools.ps1
-
-      - name: Build NSIS installer
-        run: npm run tauri build -- --bundles nsis
+          name: dropcut-windows-installer
+          path: dist
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/release/bundle/nsis/*.exe
+          files: dist/*.exe
           generate_release_notes: true

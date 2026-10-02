@@ -2,12 +2,17 @@ name: Windows build
 
 on:
   workflow_dispatch:
+  workflow_call:
   pull_request:
   push:
     branches: [main]
 
 permissions:
   contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -27,6 +32,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: Install frontend dependencies
         run: npm ci
 
@@ -37,7 +47,20 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
+      - name: Cache pinned local processing tools
+        id: tools-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/resources/tools
+            src-tauri/resources/llm
+            src-tauri/resources/licenses/generated
+          key: windows-tools-${{ hashFiles('scripts/prepare-windows-tools.ps1') }}
+
+      # The script pins every URL/checksum it fetches, so a cache hit means
+      # the exact same files the script would have produced.
       - name: Prepare pinned local processing tools
+        if: steps.tools-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: ./scripts/prepare-windows-tools.ps1
 
