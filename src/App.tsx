@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
   AudioWaveform, Captions, ChevronDown, Download, Film, FolderOpen, HardDrive, LockKeyhole,
   MessageSquareText, Flame, RotateCcw, Scissors, Search, Settings2, ShieldCheck, Smartphone, Sparkles,
@@ -53,6 +55,8 @@ function formatDuration(seconds: number) {
 }
 
 export default function App() {
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "installing" | "error">("idle");
   const [video, setVideo] = useState<VideoInfo | null>(null);
   const [preset, setPreset] = useState<PresetId>("youtube");
   const [quality, setQuality] = useState<Quality>("recommended");
@@ -192,6 +196,9 @@ export default function App() {
 
   useEffect(() => {
     if (!isTauri()) return;
+    // Checking for updates only touches GitHub Releases, never user data, and
+    // failures (e.g. offline) are silently ignored since this app works fully offline.
+    check().then(setAvailableUpdate).catch(() => {});
     invoke<boolean>("check_llm").then(setLlmReady).catch(() => setLlmReady(false));
     invoke<boolean>("check_ffmpeg").then(setFfmpegReady).catch(() => setFfmpegReady(false));
     invoke<boolean>("check_subtitle_burn_in").then((available) => {
@@ -219,6 +226,17 @@ export default function App() {
       unlistenModelProgress.then((fn) => fn());
     };
   }, [loadVideo, refreshModels]);
+
+  const installUpdate = async () => {
+    if (!availableUpdate) return;
+    setUpdateStatus("installing");
+    try {
+      await availableUpdate.downloadAndInstall();
+      await relaunch();
+    } catch {
+      setUpdateStatus("error");
+    }
+  };
 
   const chooseVideo = async () => {
     setError(null);
@@ -506,6 +524,16 @@ export default function App() {
         <div className="brand"><span className="brand-mark"><Film size={20} /></span><span>DropCut</span><em>LOCAL</em></div>
         <div className="privacy"><LockKeyhole size={15} /> Everything stays on this PC</div>
       </header>
+
+      {availableUpdate && (
+        <div className="update-banner">
+          <span><Download size={15} /> A new version ({availableUpdate.version}) is available.</span>
+          <button type="button" disabled={updateStatus === "installing"} onClick={installUpdate}>
+            {updateStatus === "installing" ? "Installing…" : "Update & restart"}
+          </button>
+          {updateStatus === "error" && <small>Update failed. Try again later.</small>}
+        </div>
+      )}
 
       <section className="hero">
         <div className="eyebrow"><Sparkles size={15} /> SIMPLE VIDEO EXPORT</div>

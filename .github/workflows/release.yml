@@ -15,6 +15,7 @@ concurrency:
 jobs:
   build:
     uses: ./.github/workflows/windows.yml
+    secrets: inherit
 
   publish:
     needs: build
@@ -26,8 +27,29 @@ jobs:
           name: dropcut-windows-installer
           path: dist
 
+      # The in-app updater (Tauri's `check()`) fetches this file to learn the
+      # latest version, its signature, and where to download it.
+      - name: Build updater manifest
+        run: |
+          set -euo pipefail
+          exe=$(ls dist/*.exe)
+          name=$(basename "$exe")
+          version="${GITHUB_REF_NAME#v}"
+          signature=$(cat "dist/${name}.sig")
+          pub_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq -n \
+            --arg version "$version" \
+            --arg pub_date "$pub_date" \
+            --arg signature "$signature" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${name}" \
+            '{version: $version, notes: "See the GitHub release notes.", pub_date: $pub_date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' \
+            > dist/latest.json
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.exe
+          files: |
+            dist/*.exe
+            dist/*.exe.sig
+            dist/latest.json
           generate_release_notes: true

@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "DropCut main window permissions",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-confirm"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-confirm",
+    "updater:default",
+    "process:allow-restart"
+  ]
 }
