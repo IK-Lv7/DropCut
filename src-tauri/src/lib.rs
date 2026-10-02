@@ -6,6 +6,7 @@ mod subtitles;
 mod tools;
 mod transcript;
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -1983,12 +1984,41 @@ async fn rerank_with_llm(
     }
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
     ranked.truncate(count);
+    // Keep the best-scoring clips, but show them in timeline order.
+    ranked.sort_by(|a, b| a.1.start.total_cmp(&b.1.start));
     Ok(Some(ranked.into_iter().map(|(_, clip)| clip).collect()))
 }
 
 #[tauri::command]
 async fn check_llm(app: AppHandle) -> bool {
     tools::resolve(&app, Tool::Llama).await.is_some() && tools::bundled_llm_model(&app).is_some()
+}
+
+/// Grabs a single preview frame near `timestamp`, so a highlight candidate
+/// can be checked at a glance without opening the full video.
+#[tauri::command]
+async fn highlight_thumbnail(app: AppHandle, input_path: String, timestamp: f64) -> Result<String, String> {
+    let input = validate_input(&input_path)?;
+    if !timestamp.is_finite() || timestamp < 0.0 {
+        return Err("Invalid timestamp.".into());
+    }
+    let ffmpeg = tools::resolve(&app, Tool::Ffmpeg)
+        .await
+        .ok_or_else(|| "FFmpeg is not bundled and was not found on PATH.".to_string())?;
+    let mut command = tools::command(&ffmpeg);
+    command
+        .args(["-ss", &format!("{timestamp:.3}")])
+        .arg("-i")
+        .arg(&input)
+        .args(["-frames:v", "1", "-vf", "scale=240:-2", "-q:v", "6", "-f", "mjpeg", "-"]);
+    let cancelled = AtomicBool::new(false);
+    let Some((status, data)) = capture_stdout(&mut command, &cancelled).await? else {
+        return Err("Could not read a preview frame.".into());
+    };
+    if !status.success() || data.is_empty() {
+        return Err(friendly_error("ffmpeg produced no preview frame"));
+    }
+    Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&data)))
 }
 
 /// Transcribes the video, then scores it for the most engaging sections.
@@ -2090,6 +2120,7 @@ pub fn run() {
             analyze_transcript,
             find_highlights,
             check_llm,
+            highlight_thumbnail,
             cancel_export
         ])
         .run(tauri::generate_context!())

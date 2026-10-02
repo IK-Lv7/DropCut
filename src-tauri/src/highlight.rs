@@ -211,7 +211,9 @@ pub fn find_highlights(
             }
         })
         .collect();
-    result.sort_by(|a, b| b.score.total_cmp(&a.score));
+    // Candidates are picked best-score-first above, but shown in timeline
+    // order so the list reads top-to-bottom the way the video plays.
+    result.sort_by(|a, b| a.start.total_cmp(&b.start));
     result
 }
 
@@ -260,11 +262,14 @@ mod tests {
         let levels = vec![-25.0; 120];
         let found = find_highlights(&words, &levels, 120.0, 20.0, 3);
         assert_eq!(found.len(), 3);
-        assert!(found[0].start <= 100.0 && found[0].end >= 100.0);
+        assert!(found.iter().any(|clip| clip.start <= 100.0 && clip.end >= 100.0));
         for a in 0..found.len() {
             for b in a + 1..found.len() {
                 assert!(found[a].end <= found[b].start || found[b].end <= found[a].start);
             }
+        }
+        for window in found.windows(2) {
+            assert!(window[0].start <= window[1].start, "clips must be returned in timeline order");
         }
     }
 

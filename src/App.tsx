@@ -86,6 +86,7 @@ export default function App() {
   const [aiUsed, setAiUsed] = useState(false);
   const [highlights, setHighlights] = useState<Highlight[] | null>(null);
   const [pickedHighlights, setPickedHighlights] = useState<Set<number>>(new Set());
+  const [highlightThumbnails, setHighlightThumbnails] = useState<Record<number, string>>({});
   const [autoZoom, setAutoZoom] = useState<AutoZoomTemplate>("none");
   const [subtitleTemplate, setSubtitleTemplate] = useState<SubtitleTemplate>("simple");
   const [subtitleFont, setSubtitleFont] = useState("");
@@ -128,6 +129,7 @@ export default function App() {
     setRemovedWords(new Set());
     setHighlights(null);
     setPickedHighlights(new Set());
+    setHighlightThumbnails({});
   }, [video?.path]);
 
   const wordCuts = useMemo<CutRange[]>(() => {
@@ -358,7 +360,13 @@ export default function App() {
         setHighlights(result.highlights);
         setAiUsed(result.aiUsed);
         setPickedHighlights(new Set(result.highlights.length ? [0] : []));
+        setHighlightThumbnails({});
         if (result.highlights.length === 0) setError("No highlights were found. The video may be shorter than the clip length.");
+        result.highlights.forEach((clip, index) => {
+          invoke<string>("highlight_thumbnail", { inputPath: video.path, timestamp: clip.start })
+            .then((dataUrl) => setHighlightThumbnails((current) => ({ ...current, [index]: dataUrl })))
+            .catch(() => {});
+        });
       }
     } catch (reason) {
       setError(String(reason));
@@ -605,6 +613,7 @@ export default function App() {
                       return (
                         <button type="button" key={index} disabled={processing} aria-pressed={picked} className={`highlight-item ${picked ? "picked" : ""}`} onClick={() => togglePickedHighlight(index)}>
                           <span className="highlight-check">{picked ? "✓" : ""}</span>
+                          <span className="highlight-thumb">{highlightThumbnails[index] ? <img src={highlightThumbnails[index]} alt="" /> : <Film size={16} />}</span>
                           <span className="highlight-body"><strong>#{index + 1} · {formatDuration(clip.start)} – {formatDuration(clip.end)}</strong><small>{clip.reason} · {Math.round(clip.end - clip.start)}s</small></span>
                           <span className="highlight-state">{picked ? "Selected" : "Not used"}</span>
                         </button>
