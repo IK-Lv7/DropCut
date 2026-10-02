@@ -1318,10 +1318,7 @@ async fn run_ffmpeg_encode(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
+    command.creation_flags(0x08000000);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
