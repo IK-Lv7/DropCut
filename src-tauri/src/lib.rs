@@ -412,15 +412,6 @@ enum ProcessResult {
     Cancelled,
 }
 
-#[cfg(windows)]
-fn hide_console(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    command.as_std_mut().creation_flags(0x08000000);
-}
-
-#[cfg(not(windows))]
-fn hide_console(_command: &mut Command) {}
-
 async fn run_cancelable(
     command: &mut Command,
     cancelled: &AtomicBool,
@@ -442,7 +433,6 @@ async fn run_cancelable_logged(
 
 async fn run_spawned(command: &mut Command, cancelled: &AtomicBool) -> Result<ProcessResult, String> {
     command.stdout(Stdio::null()).kill_on_drop(true);
-    hide_console(command);
     let mut child = command
         .spawn()
         .map_err(|error| friendly_error(&error.to_string()))?;
@@ -563,7 +553,6 @@ async fn detect_silence(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    hide_console(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| friendly_error(&error.to_string()))?;
@@ -1020,7 +1009,6 @@ async fn analyze_loudness(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    hide_console(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| friendly_error(&error.to_string()))?;
@@ -1347,8 +1335,6 @@ async fn run_ffmpeg_encode(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -2055,7 +2041,6 @@ async fn capture_stdout(command: &mut Command, cancelled: &AtomicBool) -> Result
         .stderr(Stdio::null())
         .stdin(Stdio::null())
         .kill_on_drop(true);
-    hide_console(command);
     let mut child = command.spawn().map_err(|error| friendly_error(&error.to_string()))?;
     let mut stdout = child.stdout.take().ok_or("Could not read the tool output.")?;
     let mut data = Vec::new();

@@ -13,7 +13,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The app reports the version from these files, while latest.json uses the
+  # tag. If they differ, the updater offers the same build forever.
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches app version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          conf=$(jq -r .version src-tauri/tauri.conf.json)
+          pkg=$(jq -r .version package.json)
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n1)
+          for value in "$conf" "$pkg" "$cargo"; do
+            if [ "$value" != "$tag" ]; then
+              echo "::error::Tag v$tag does not match app version (tauri.conf.json $conf, package.json $pkg, Cargo.toml $cargo). Bump the version before tagging."
+              exit 1
+            fi
+          done
+
   build:
+    needs: check-version
     uses: ./.github/workflows/windows.yml
     secrets: inherit
 

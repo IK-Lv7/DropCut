@@ -53,7 +53,7 @@ fn bundled_candidates(app: &AppHandle, tool: Tool) -> Vec<PathBuf> {
 }
 
 async fn responds_to_probe(path: &Path, tool: Tool) -> bool {
-    Command::new(path)
+    command(path)
         .arg(tool.probe_argument())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -91,8 +91,17 @@ pub fn bundled_llm_model(app: &AppHandle) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
+/// Every external tool goes through here so that, on Windows, no console
+/// window flashes up while the app works (CREATE_NO_WINDOW).
 pub fn command(path: &Path) -> Command {
-    Command::new(path)
+    #[allow(unused_mut)]
+    let mut command = Command::new(path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.as_std_mut().creation_flags(0x08000000);
+    }
+    command
 }
 
 /// A GPU video encoder FFmpeg can use instead of the CPU (`libx264`/`libx265`).
@@ -122,7 +131,7 @@ impl HwEncoder {
 }
 
 async fn encoder_works(ffmpeg: &Path, encoder: &str) -> bool {
-    Command::new(ffmpeg)
+    command(ffmpeg)
         .args([
             "-hide_banner",
             "-loglevel",
