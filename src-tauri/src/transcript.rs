@@ -5,6 +5,7 @@
 
 use serde::Serialize;
 
+use crate::subtitles::Cue;
 use crate::TimeRange;
 
 const MIN_PIECE_SECONDS: f64 = 0.05;
@@ -112,7 +113,11 @@ fn tokens_to_words(pieces: Vec<Piece>) -> Vec<TranscriptWord> {
         if attaches {
             if let Some(last) = words.last_mut() {
                 last.text.push_str(text.trim_end());
-                last.end = last.end.max(piece.end);
+                // Punctuation is often stamped at the next speech; it must
+                // not stretch the word across the pause.
+                if !is_punctuation_only(&text) {
+                    last.end = last.end.max(piece.end);
+                }
             }
         } else if !text.trim().is_empty() {
             words.push(TranscriptWord {
@@ -126,14 +131,77 @@ fn tokens_to_words(pieces: Vec<Piece>) -> Vec<TranscriptWord> {
     words
 }
 
-pub fn parse_whisper_json(raw: &[u8]) -> Result<Vec<TranscriptWord>, String> {
+/// One speech span that whisper.cpp kept with `--vad`: where it starts in the
+/// original audio and in the condensed audio whisper actually transcribed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VadSegment {
+    pub orig_start: f64,
+    pub orig_end: f64,
+    pub vad_start: f64,
+}
+
+/// Silence whisper.cpp inserts between condensed speech spans.
+const VAD_GAP_SECONDS: f64 = 0.1;
+
+/// Reads the `vad_segment_info` lines whisper-cli writes to stderr.
+pub fn parse_vad_segments(log: &str) -> Vec<VadSegment> {
+    let mut segments: Vec<VadSegment> = log
+        .lines()
+        .filter_map(|line| {
+            let info = line.split_once("vad_segment_info:")?.1;
+            let value = |key: &str| -> Option<f64> {
+                let rest = info.split_once(key)?.1;
+                rest.split(|c: char| c == ',' || c.is_whitespace())
+                    .find(|part| !part.is_empty())?
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite())
+            };
+            Some(VadSegment {
+                orig_start: value("orig_start:")?,
+                orig_end: value("orig_end:")?,
+                vad_start: value("vad_start:")?,
+            })
+        })
+        .collect();
+    segments.sort_by(|a, b| a.vad_start.total_cmp(&b.vad_start));
+    segments
+}
+
+/// whisper.cpp 1.9 maps segment times back from condensed audio by
+/// interpolating across the 0.1 s gaps, so a time inside a gap lands anywhere
+/// in the real pause (the next line shows up early), and token times are not
+/// mapped at all. Inside a span the offset is exact; in a gap a start snaps
+/// forward to the next speech and an end back to the previous one.
+fn map_vad_time(time: f64, segments: &[VadSegment], is_start: bool) -> f64 {
+    let Some(index) = segments.iter().rposition(|segment| segment.vad_start <= time) else {
+        return segments.first().map_or(time, |segment| segment.orig_start);
+    };
+    let segment = &segments[index];
+    let offset = time - segment.vad_start;
+    let Some(next) = segments.get(index + 1) else {
+        return segment.orig_start + offset;
+    };
+    let span = (next.vad_start - VAD_GAP_SECONDS - segment.vad_start).max(0.0);
+    if offset < span {
+        (segment.orig_start + offset).min(next.orig_start)
+    } else if is_start {
+        next.orig_start
+    } else {
+        (segment.orig_start + span).min(next.orig_start)
+    }
+}
+
+/// Reads token pieces per whisper segment, with times on the original timeline.
+fn parse_segments(raw: &[u8], vad: &[VadSegment]) -> Result<Vec<Vec<Piece>>, String> {
     let document: serde_json::Value = serde_json::from_str(&escape_invalid_utf8(raw))
         .map_err(|_| "The transcript could not be read.".to_string())?;
     let segments = document["transcription"]
         .as_array()
         .ok_or_else(|| "The transcript could not be read.".to_string())?;
-    let mut pieces = Vec::new();
+    let mut result = Vec::with_capacity(segments.len());
     for segment in segments {
+        let mut pieces = Vec::new();
         for token in segment["tokens"].as_array().into_iter().flatten() {
             let Some(text) = token["text"].as_str() else {
                 continue;
@@ -149,7 +217,27 @@ pub fn parse_whisper_json(raw: &[u8]) -> Result<Vec<TranscriptWord>, String> {
                 bytes: token_bytes(text),
             });
         }
+        result.push(pieces);
     }
+    // A whisper build that already maps token times would report times past
+    // the condensed audio; leave those alone instead of mapping twice.
+    let condensed_end = vad
+        .last()
+        .map(|last| last.vad_start + (last.orig_end - last.orig_start) + 1.0);
+    let already_mapped = condensed_end.is_some_and(|limit| {
+        result.iter().flatten().any(|piece| piece.end > limit)
+    });
+    if !vad.is_empty() && !already_mapped {
+        for piece in result.iter_mut().flatten() {
+            piece.start = map_vad_time(piece.start, vad, true);
+            piece.end = map_vad_time(piece.end, vad, false).max(piece.start);
+        }
+    }
+    Ok(result)
+}
+
+pub fn parse_whisper_json(raw: &[u8], vad: &[VadSegment]) -> Result<Vec<TranscriptWord>, String> {
+    let pieces = parse_segments(raw, vad)?.into_iter().flatten().collect();
     let mut words = tokens_to_words(pieces);
     // Whisper sometimes reports a token ending after the next one starts.
     for index in 1..words.len() {
@@ -160,6 +248,59 @@ pub fn parse_whisper_json(raw: &[u8]) -> Result<Vec<TranscriptWord>, String> {
     }
     mark_fillers(&mut words);
     Ok(words)
+}
+
+/// A pause this long inside one whisper segment starts a new subtitle, so the
+/// words after it are not shown before they are spoken.
+const CUE_GAP_SECONDS: f64 = 0.8;
+/// Short cues stay up at least this long when the next cue allows it.
+const MIN_CUE_SECONDS: f64 = 0.8;
+/// Token end times run slightly early, so cues linger briefly after speech.
+const CUE_HOLD_SECONDS: f64 = 0.3;
+
+/// Builds subtitle cues timed by the spoken tokens rather than whisper's
+/// segment bounds, which often cover the silence before speech starts.
+pub fn subtitle_cues(raw: &[u8], vad: &[VadSegment]) -> Result<Vec<Cue>, String> {
+    let mut cues = Vec::new();
+    for pieces in parse_segments(raw, vad)? {
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut start = 0.0;
+        let mut end = 0.0;
+        for piece in pieces {
+            let punctuation = std::str::from_utf8(&piece.bytes).is_ok_and(is_punctuation_only);
+            let at_boundary = std::str::from_utf8(&bytes).is_ok();
+            if !bytes.is_empty() && at_boundary && !punctuation && piece.start - end > CUE_GAP_SECONDS {
+                push_cue(&mut cues, &bytes, start, end);
+                bytes.clear();
+            }
+            if bytes.is_empty() {
+                start = piece.start;
+                end = piece.end;
+            }
+            bytes.extend_from_slice(&piece.bytes);
+            if !punctuation {
+                end = f64::max(end, piece.end);
+            }
+        }
+        push_cue(&mut cues, &bytes, start, end);
+    }
+    cues.sort_by(|a, b| a.start.total_cmp(&b.start));
+    for index in 0..cues.len() {
+        let next_start = cues.get(index + 1).map_or(f64::INFINITY, |next| next.start);
+        let cue = &mut cues[index];
+        cue.end = (cue.end + CUE_HOLD_SECONDS)
+            .max(cue.start + MIN_CUE_SECONDS)
+            .min(next_start);
+    }
+    cues.retain(|cue| cue.end > cue.start);
+    Ok(cues)
+}
+
+fn push_cue(cues: &mut Vec<Cue>, bytes: &[u8], start: f64, end: f64) {
+    let text = String::from_utf8_lossy(bytes).trim().to_string();
+    if !text.is_empty() && !is_punctuation_only(&text) {
+        cues.push(Cue { start, end, text });
+    }
 }
 
 const HIGH_CONFIDENCE_FILLERS: [&str; 19] = [
@@ -324,7 +465,7 @@ mod tests {
             token(" um", 800, 1000),
             token("[_TT_50]", 1000, 1000),
         ]);
-        let words = parse_whisper_json(&raw).unwrap();
+        let words = parse_whisper_json(&raw, &[]).unwrap();
         assert_eq!(words.len(), 2);
         assert_eq!(words[0].text, "Americans,");
         assert_eq!((words[0].start, words[0].end), (0.1, 0.6));
@@ -341,7 +482,7 @@ mod tests {
             token("い", 800, 900),
             token("。", 900, 900),
         ]);
-        let words = parse_whisper_json(&raw).unwrap();
+        let words = parse_whisper_json(&raw, &[]).unwrap();
         let texts: Vec<&str> = words.iter().map(|word| word.text.as_str()).collect();
         assert_eq!(texts, ["今日", "は", "暑", "い。"]);
     }
@@ -357,16 +498,72 @@ mod tests {
         raw.extend_from_slice(br#"","offsets":{"from":0,"to":200}},{"text":""#);
         raw.push(0xAB);
         raw.extend_from_slice(br#"","offsets":{"from":200,"to":400}}]}]}"#);
-        let words = parse_whisper_json(&raw).unwrap();
+        let words = parse_whisper_json(&raw, &[]).unwrap();
         assert_eq!(words.len(), 1);
         assert_eq!(words[0].text, "猫");
         assert_eq!((words[0].start, words[0].end), (0.0, 0.4));
     }
 
+    const VAD_LOG: &str = "\
+whisper_vad: detected 2 speech segments
+whisper_vad: vad_segment_info: orig_start: 0.29, orig_end: 2.24, vad_start: 0.00, vad_end: 1.95
+whisper_vad: vad_segment_info: orig_start: 10.08, orig_end: 12.48, vad_start: 2.15, vad_end: 4.55
+";
+
+    #[test]
+    fn reads_vad_spans_from_the_whisper_log() {
+        let segments = parse_vad_segments(VAD_LOG);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(
+            segments[1],
+            VadSegment { orig_start: 10.08, orig_end: 12.48, vad_start: 2.15 }
+        );
+        assert!(parse_vad_segments("no vad here").is_empty());
+    }
+
+    #[test]
+    fn maps_condensed_times_and_snaps_gap_times_to_speech() {
+        let segments = parse_vad_segments(VAD_LOG);
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        // Inside a span: plain offset.
+        assert!(close(map_vad_time(1.0, &segments, true), 1.29));
+        assert!(close(map_vad_time(3.0, &segments, true), 10.93));
+        // In the inserted gap: starts wait for the next speech, ends stay put.
+        assert!(close(map_vad_time(2.1, &segments, true), 10.08));
+        assert!(close(map_vad_time(2.1, &segments, false), 2.34));
+    }
+
+    #[test]
+    fn subtitle_cues_follow_speech_not_segment_bounds() {
+        let raw = br#"{"transcription":[
+            {"offsets":{"from":0,"to":13430},"tokens":[
+                {"text":"[_BEG_]","offsets":{"from":0,"to":0}},
+                {"text":" Hello","offsets":{"from":100,"to":900}},
+                {"text":" there","offsets":{"from":900,"to":1800}},
+                {"text":".","offsets":{"from":1800,"to":1900}},
+                {"text":" Next","offsets":{"from":2120,"to":2600}},
+                {"text":" line","offsets":{"from":2600,"to":3000}}
+            ]}]}"#;
+        let cues = subtitle_cues(raw, &parse_vad_segments(VAD_LOG)).unwrap();
+        let texts: Vec<&str> = cues.iter().map(|cue| cue.text.as_str()).collect();
+        assert_eq!(texts, ["Hello there.", "Next line"]);
+        assert!((cues[0].start - 0.39).abs() < 1e-9);
+        assert!(cues[0].end <= 2.34 + CUE_HOLD_SECONDS + 1e-9);
+        assert!((cues[1].start - 10.08).abs() < 1e-9);
+    }
+
+    #[test]
+    fn transcript_words_use_the_original_timeline_with_vad() {
+        let raw = document(vec![token(" one", 100, 500), token(" two", 2200, 2600)]);
+        let words = parse_whisper_json(&raw, &parse_vad_segments(VAD_LOG)).unwrap();
+        assert!((words[0].start - 0.39).abs() < 1e-9);
+        assert!((words[1].start - 10.13).abs() < 1e-9);
+    }
+
     #[test]
     fn rejects_documents_without_a_transcript() {
-        assert!(parse_whisper_json(b"{}").is_err());
-        assert!(parse_whisper_json(b"not json").is_err());
+        assert!(parse_whisper_json(b"{}", &[]).is_err());
+        assert!(parse_whisper_json(b"not json", &[]).is_err());
     }
 
     #[test]
@@ -451,13 +648,20 @@ mod tests {
         assert!(subtract_cuts(&[], &[], 10.0).unwrap().is_empty());
     }
 
-    /// Manual check against real whisper-cli output (`-ojf`):
-    /// `DROPCUT_TEST_WHISPER_JSON=out.json cargo test parses_real -- --ignored --nocapture`
+    /// Manual check against real whisper-cli output (`-ojf`, stderr saved as the log):
+    /// `DROPCUT_TEST_WHISPER_JSON=out.json DROPCUT_TEST_WHISPER_LOG=err.log cargo test parses_real -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn parses_real_whisper_output() {
         let raw = std::fs::read(std::env::var("DROPCUT_TEST_WHISPER_JSON").unwrap()).unwrap();
-        let words = parse_whisper_json(&raw).unwrap();
+        let log = std::env::var("DROPCUT_TEST_WHISPER_LOG")
+            .map(|path| std::fs::read_to_string(path).unwrap())
+            .unwrap_or_default();
+        let vad = parse_vad_segments(&log);
+        for cue in subtitle_cues(&raw, &vad).unwrap() {
+            println!("cue {:6.2}-{:6.2} {}", cue.start, cue.end, cue.text);
+        }
+        let words = parse_whisper_json(&raw, &vad).unwrap();
         for word in &words {
             println!("{:6.2}-{:6.2} {}", word.start, word.end, word.text);
         }

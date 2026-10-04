@@ -425,10 +425,23 @@ async fn run_cancelable(
     command: &mut Command,
     cancelled: &AtomicBool,
 ) -> Result<ProcessResult, String> {
-    command
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+    command.stderr(Stdio::null());
+    run_spawned(command, cancelled).await
+}
+
+/// Like `run_cancelable`, but keeps stderr in `log_path`.
+async fn run_cancelable_logged(
+    command: &mut Command,
+    cancelled: &AtomicBool,
+    log_path: &Path,
+) -> Result<ProcessResult, String> {
+    let log = std::fs::File::create(log_path).map_err(|error| friendly_error(&error.to_string()))?;
+    command.stderr(Stdio::from(log));
+    run_spawned(command, cancelled).await
+}
+
+async fn run_spawned(command: &mut Command, cancelled: &AtomicBool) -> Result<ProcessResult, String> {
+    command.stdout(Stdio::null()).kill_on_drop(true);
     hide_console(command);
     let mut child = command
         .spawn()
@@ -793,61 +806,78 @@ async fn create_subtitles(
         }
     };
     let subtitle_path = output_base.with_extension("srt");
+    let whisper_base = work_dir.join("subtitles");
+    let log_path = work_dir.join("whisper.log");
+    let mut cues = Vec::new();
     // VAD can classify a quiet or noisy recording as all non-speech; retry without it.
     for use_vad in [true, false] {
-    let _ = tokio::fs::remove_file(&subtitle_path).await;
-    let mut transcribe = tools::command(&whisper);
-    transcribe
-        .args(["-m"])
-        .arg(&model)
-        .args(["-f"])
-        .arg(&audio_path)
-        .args(["-l", language, "-osrt", "-of"])
-        .arg(&output_base);
-    if let Err(error) = add_accuracy_args(&mut transcribe, &work_dir, use_vad).await {
-        let _ = tokio::fs::remove_dir_all(&work_dir).await;
-        return Err(error);
-    }
-    let transcription_result = match run_cancelable(&mut transcribe, cancelled).await {
-        Ok(result) => result,
-        Err(error) => {
+        let _ = tokio::fs::remove_file(whisper_base.with_extension("json")).await;
+        let _ = tokio::fs::remove_file(whisper_base.with_extension("srt")).await;
+        let mut transcribe = tools::command(&whisper);
+        transcribe
+            .args(["-m"])
+            .arg(&model)
+            .args(["-f"])
+            .arg(&audio_path)
+            .args(["-l", language, "-osrt", "-ojf", "-of"])
+            .arg(&whisper_base);
+        if let Err(error) = add_accuracy_args(&mut transcribe, &work_dir, use_vad).await {
             let _ = tokio::fs::remove_dir_all(&work_dir).await;
-            let _ = tokio::fs::remove_file(output_base.with_extension("srt")).await;
             return Err(error);
         }
-    };
-    match transcription_result {
-        ProcessResult::Cancelled => {
-            let _ = tokio::fs::remove_dir_all(&work_dir).await;
-            return Ok(SubtitleResult::Cancelled);
+        let transcription_result =
+            match run_cancelable_logged(&mut transcribe, cancelled, &log_path).await {
+                Ok(result) => result,
+                Err(error) => {
+                    let _ = tokio::fs::remove_dir_all(&work_dir).await;
+                    return Err(error);
+                }
+            };
+        match transcription_result {
+            ProcessResult::Cancelled => {
+                let _ = tokio::fs::remove_dir_all(&work_dir).await;
+                return Ok(SubtitleResult::Cancelled);
+            }
+            ProcessResult::Completed(status) if !status.success() => {
+                let _ = tokio::fs::remove_dir_all(&work_dir).await;
+                return Err("Local transcription failed. Check the model and try again.".into());
+            }
+            ProcessResult::Completed(_) => {}
         }
-        ProcessResult::Completed(status) if !status.success() => {
-            let _ = tokio::fs::remove_dir_all(&work_dir).await;
-            let _ = tokio::fs::remove_file(output_base.with_extension("srt")).await;
-            return Err("Local transcription failed. Check the model and try again.".into());
+        cues = read_subtitle_cues(&whisper_base, &log_path).await;
+        if !cues.is_empty() {
+            break;
         }
-        ProcessResult::Completed(_) => {}
-    }
-    let metadata = match tokio::fs::metadata(&subtitle_path).await {
-        Ok(metadata) => metadata,
-        Err(_) => {
-            let _ = tokio::fs::remove_file(&subtitle_path).await;
-            let _ = tokio::fs::remove_dir_all(&work_dir).await;
-            return Err("whisper-cli did not produce an SRT file.".into());
-        }
-    };
-    if metadata.len() == 0 {
-        if use_vad {
-            continue;
-        }
-        let _ = tokio::fs::remove_file(&subtitle_path).await;
-        let _ = tokio::fs::remove_dir_all(&work_dir).await;
-        return Err("whisper-cli produced an empty SRT file.".into());
-    }
-    break;
     }
     let _ = tokio::fs::remove_dir_all(&work_dir).await;
+    if cues.is_empty() {
+        return Err("whisper-cli produced an empty SRT file.".into());
+    }
+    for cue in &mut cues {
+        cue.text = subtitles::laughter_to_text(&cue.text, language);
+    }
+    tokio::fs::write(&subtitle_path, subtitles::to_srt(&cues))
+        .await
+        .map_err(|error| friendly_error(&error.to_string()))?;
     Ok(SubtitleResult::Created(subtitle_path))
+}
+
+/// Cues timed by whisper's tokens on the original timeline; falls back to
+/// whisper's own SRT when the token JSON is unusable.
+async fn read_subtitle_cues(base: &Path, log_path: &Path) -> Vec<subtitles::Cue> {
+    let log = tokio::fs::read(log_path).await.unwrap_or_default();
+    let vad = transcript::parse_vad_segments(&String::from_utf8_lossy(&log));
+    if let Ok(raw) = tokio::fs::read(base.with_extension("json")).await {
+        if let Ok(cues) = transcript::subtitle_cues(&raw, &vad) {
+            if !cues.is_empty() {
+                return cues;
+            }
+        }
+    }
+    tokio::fs::read(base.with_extension("srt"))
+        .await
+        .map(|content| subtitles::parse_srt(&String::from_utf8_lossy(&content)))
+        .unwrap_or_default()
 }
 
 fn parse_ffmpeg_time(line: &str) -> Option<f64> {
@@ -1955,7 +1985,8 @@ async fn transcribe_words(
             transcribe.args(["--prompt", prompt]);
         }
         add_accuracy_args(&mut transcribe, &work_dir, true).await?;
-        match run_cancelable(&mut transcribe, cancelled).await? {
+        let log_path = work_dir.join("whisper.log");
+        match run_cancelable_logged(&mut transcribe, cancelled, &log_path).await? {
             ProcessResult::Cancelled => return Ok(None),
             ProcessResult::Completed(status) if !status.success() => {
                 return Err("Local transcription failed. Check the model and try again.".to_string());
@@ -1965,7 +1996,9 @@ async fn transcribe_words(
         let raw = tokio::fs::read(output_base.with_extension("json"))
             .await
             .map_err(|_| "whisper-cli did not produce a transcript.".to_string())?;
-        transcript::parse_whisper_json(&raw).map(Some)
+        let log = tokio::fs::read(&log_path).await.unwrap_or_default();
+        let vad = transcript::parse_vad_segments(&String::from_utf8_lossy(&log));
+        transcript::parse_whisper_json(&raw, &vad).map(Some)
     }
     .await;
     let _ = tokio::fs::remove_dir_all(&work_dir).await;

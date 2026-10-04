@@ -148,6 +148,185 @@ pub fn parse_srt(content: &str) -> Vec<Cue> {
     cues
 }
 
+fn srt_time(seconds: f64) -> String {
+    let millis = (seconds.max(0.0) * 1000.0).round() as u64;
+    format!(
+        "{:02}:{:02}:{:02},{:03}",
+        millis / 3_600_000,
+        millis / 60_000 % 60,
+        millis / 1000 % 60,
+        millis % 1000
+    )
+}
+
+pub fn to_srt(cues: &[Cue]) -> String {
+    cues.iter()
+        .enumerate()
+        .map(|(index, cue)| {
+            format!(
+                "{}\n{} --> {}\n{}\n\n",
+                index + 1,
+                srt_time(cue.start),
+                srt_time(cue.end),
+                cue.text
+            )
+        })
+        .collect()
+}
+
+fn is_japanese(character: char) -> bool {
+    matches!(character, '\u{3040}'..='\u{30FF}' | '\u{3400}'..='\u{9FFF}' | '\u{FF66}'..='\u{FF9F}')
+}
+
+/// Whisper's notes for non-speech, e.g. "(笑)", "[Laughter]", "*laughs*".
+fn is_laughter_note(inner: &str) -> bool {
+    let inner = inner.trim().to_lowercase();
+    inner.contains('笑') || ["laugh", "chuckl", "giggl"].iter().any(|word| inner.contains(word))
+}
+
+fn closing_bracket(open: char) -> Option<char> {
+    Some(match open {
+        '(' => ')',
+        '（' => '）',
+        '[' => ']',
+        '【' => '】',
+        '*' => '*',
+        _ => return None,
+    })
+}
+
+/// Length in chars of a spoken Japanese laugh at the start of `chars`, such as
+/// "ハハハ", "あはは" or "はっはっは". Two syllables need a leading あ/わ so
+/// that words like "はは" (mother) are left alone.
+fn japanese_laugh_len(chars: &[char]) -> Option<usize> {
+    let mut index = 0;
+    let prefixed = chars.first().is_some_and(|c| matches!(c, 'あ' | 'ア' | 'わ' | 'ワ'));
+    if prefixed {
+        index += 1;
+    }
+    let mut syllables = 0;
+    let mut end = 0;
+    while let Some(&character) = chars.get(index) {
+        match character {
+            'は' | 'ハ' | 'ひ' | 'ヒ' | 'ふ' | 'フ' | 'へ' | 'ヘ' | 'ﾊ' => {
+                syllables += 1;
+                end = index + 1;
+            }
+            'っ' | 'ッ' | 'ー' | '〜' | '～' if syllables > 0 => end = index + 1,
+            _ => break,
+        }
+        index += 1;
+    }
+    (syllables >= 3 || (prefixed && syllables >= 2)).then_some(end)
+}
+
+/// "haha", "Hahaha", "ahaha", "hehe" (one written word).
+fn is_english_laugh_word(word: &str) -> bool {
+    let word = word.to_ascii_lowercase();
+    let body = word.strip_prefix('a').unwrap_or(&word);
+    let body = body.strip_suffix('h').unwrap_or(body);
+    body.len() >= 4
+        && body.len() % 2 == 0
+        && body.as_bytes().chunks(2).all(|pair| matches!(pair, b"ha" | b"he" | b"hi"))
+}
+
+/// Replaces laughter in a cue with the internet-style laugh viewers expect:
+/// "www" for Japanese and "lol" for English. `language` is the transcription
+/// language; with "auto" the cue's own script decides.
+pub fn laughter_to_text(text: &str, language: &str) -> String {
+    const MARK: char = '\u{E000}';
+    let japanese = match language {
+        "ja" => true,
+        "en" => false,
+        _ => text.chars().any(is_japanese),
+    };
+    let chars: Vec<char> = text.chars().collect();
+    let mut marked = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < chars.len() {
+        let character = chars[index];
+        if let Some(close) = closing_bracket(character) {
+            if let Some(length) = chars[index + 1..].iter().position(|&c| c == close) {
+                let inner: String = chars[index + 1..index + 1 + length].iter().collect();
+                if is_laughter_note(&inner) {
+                    marked.push(MARK);
+                    index += length + 2;
+                    continue;
+                }
+            }
+        }
+        if let Some(length) = japanese_laugh_len(&chars[index..]) {
+            marked.push(MARK);
+            index += length;
+            continue;
+        }
+        let starts_word = index == 0 || !chars[index - 1].is_ascii_alphanumeric();
+        if character.is_ascii_alphabetic() && starts_word {
+            let length = chars[index..].iter().take_while(|c| c.is_ascii_alphabetic()).count();
+            let word: String = chars[index..index + length].iter().collect();
+            // A lone "ha" is laughter only when another laugh word follows.
+            let repeated_ha = word.eq_ignore_ascii_case("ha") && {
+                let rest = &chars[index + length..];
+                let skip = rest.iter().take_while(|c| matches!(c, ' ' | ',')).count();
+                let next: String = rest[skip..].iter().take_while(|c| c.is_ascii_alphabetic()).collect();
+                let follows_laugh = marked.trim_end_matches([' ', ',']).ends_with(MARK)
+                    && marked.ends_with([' ', ',']);
+                follows_laugh
+                    || skip > 0 && (next.eq_ignore_ascii_case("ha") || is_english_laugh_word(&next))
+            };
+            if repeated_ha || is_english_laugh_word(&word) {
+                marked.push(MARK);
+                index += length;
+                continue;
+            }
+        }
+        marked.push(character);
+        index += 1;
+    }
+    if !marked.contains(MARK) {
+        return text.to_string();
+    }
+    // Merge laughs separated only by spaces or commas ("Ha ha, haha").
+    let mut merged = String::with_capacity(marked.len());
+    let mut pending = String::new();
+    for character in marked.chars() {
+        if merged.ends_with(MARK) && matches!(character, ' ' | ',' | '、' | '，' | '　') {
+            pending.push(character);
+            continue;
+        }
+        if character != MARK || !merged.ends_with(MARK) {
+            merged.push_str(&pending);
+            merged.push(character);
+        }
+        pending.clear();
+    }
+    let laugh = if japanese { "www" } else { "lol" };
+    let mut output = String::with_capacity(merged.len());
+    let mut characters = merged.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != MARK {
+            output.push(character);
+            continue;
+        }
+        if japanese {
+            // "面白い (笑)。" reads as "面白いwww".
+            while output.ends_with([' ', '　']) {
+                output.pop();
+            }
+            while characters.peek().is_some_and(|c| matches!(c, '。' | '、' | '.' | ',' | '，' | '．')) {
+                characters.next();
+            }
+        } else if output.chars().last().is_some_and(|c| c.is_alphanumeric()) {
+            output.push(' ');
+        }
+        output.push_str(laugh);
+        if !japanese && characters.peek().is_some_and(|c| c.is_alphanumeric()) {
+            output.push(' ');
+        }
+    }
+    output.trim().to_string()
+}
+
 fn strip_tags(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut in_tag = false;
@@ -326,6 +505,55 @@ mod tests {
     use super::*;
 
     const SRT: &str = "\u{feff}1\r\n00:00:01,000 --> 00:00:03,500\r\n<i>Hello</i> there\r\n\r\n2\r\n00:01:02,250 --> 00:01:04,000\r\n今日は\r\n暑いです\r\n\r\nbroken\r\n";
+
+    #[test]
+    fn japanese_laughter_becomes_www() {
+        for (input, expected) in [
+            ("面白い (笑)", "面白いwww"),
+            ("（笑い声）", "www"),
+            ("ハハハ、それはないでしょ", "wwwそれはないでしょ"),
+            ("あははっ。本当に？", "www本当に？"),
+            ("はっはっは", "www"),
+            ("[Laughter]", "www"),
+        ] {
+            assert_eq!(laughter_to_text(input, "ja"), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn english_laughter_becomes_lol() {
+        for (input, expected) in [
+            ("That's funny (laughs)", "That's funny lol"),
+            ("[LAUGHTER]", "lol"),
+            ("Hahaha, no way", "lol, no way"),
+            ("Ha ha ha that was great", "lol that was great"),
+            ("Ha, I see", "Ha, I see"),
+            ("haha haha", "lol"),
+            ("*chuckles* okay", "lol okay"),
+        ] {
+            assert_eq!(laughter_to_text(input, "en"), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn laughter_follows_the_cue_script_in_auto_and_spares_real_words() {
+        assert_eq!(laughter_to_text("やばい(笑)", "auto"), "やばいwww");
+        assert_eq!(laughter_to_text("(laughing) Oh no", "auto"), "lol Oh no");
+        for text in ["はは", "母は元気です", "Hahn said hello", "(applause)", "Hi there"] {
+            assert_eq!(laughter_to_text(text, "auto"), text, "{text}");
+        }
+    }
+
+    #[test]
+    fn written_srt_parses_back() {
+        let cues = vec![
+            Cue { start: 0.5, end: 2.25, text: "Hello".into() },
+            Cue { start: 3661.0, end: 3662.5, text: "今日は".into() },
+        ];
+        let srt = to_srt(&cues);
+        assert!(srt.contains("01:01:01,000 --> 01:01:02,500"));
+        assert_eq!(parse_srt(&srt), cues);
+    }
 
     #[test]
     fn parses_srt_with_tags_bom_and_crlf() {
