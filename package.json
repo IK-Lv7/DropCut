@@ -2,7 +2,7 @@
   "name": "dropcut",
   "private": true,
   "license": "MIT",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -2,12 +2,15 @@
 //! density, loudness and keywords, then picks the best non-overlapping windows.
 //! No models or network are involved, so results are deterministic and offline.
 
+use crate::subtitles::has_laughter;
 use crate::transcript::TranscriptWord;
 use serde::Serialize;
 
 pub const LEVEL_SAMPLE_RATE: u32 = 8000;
 const SNAP_SECONDS: f64 = 5.0;
 const MIN_TARGET: f64 = 10.0;
+/// Score added to a second in which the transcript contains laughter.
+const LAUGHTER_BONUS: f64 = 2.0;
 const SENTENCE_END: &[char] = &['。', '.', '!', '?', '！', '？'];
 
 const KEYWORDS: &[&str] = &[
@@ -71,18 +74,23 @@ struct Seconds {
     speech: Vec<f64>,
     loudness: Vec<f64>,
     keywords: Vec<f64>,
+    laughter: Vec<f64>,
 }
 
 impl Seconds {
     fn total(&self, index: usize) -> f64 {
-        self.speech[index] + 0.7 * self.loudness[index] + self.keywords[index]
+        self.speech[index] + 0.7 * self.loudness[index] + self.keywords[index] + self.laughter[index]
     }
 }
 
 fn per_second_features(words: &[TranscriptWord], levels: &[f64], seconds: usize) -> Seconds {
     let mut density = vec![0.0; seconds];
     let mut keywords = vec![0.0; seconds];
+    // Whisper splits "(笑)" into several tokens, so laughter is looked for in
+    // the words of each second together, not word by word.
+    let mut spoken = vec![Vec::<&str>::new(); seconds];
     for word in words {
+        spoken[(word.start.max(0.0) as usize).min(seconds - 1)].push(&word.text);
         if word.filler == Some("high") {
             continue;
         }
@@ -99,10 +107,19 @@ fn per_second_features(words: &[TranscriptWord], levels: &[f64], seconds: usize)
             *value = value.min(-60.0);
         }
     }
+    let laughter = spoken
+        .iter()
+        .map(|texts| {
+            let laughs = !texts.is_empty()
+                && (has_laughter(&texts.join(" ")) || has_laughter(&texts.concat()));
+            if laughs { LAUGHTER_BONUS } else { 0.0 }
+        })
+        .collect();
     Seconds {
         speech: z_scores(&density),
         loudness: z_scores(&loudness),
         keywords,
+        laughter,
     }
 }
 
@@ -155,7 +172,10 @@ fn reason(features: &Seconds, from: usize, to: usize) -> &'static str {
     let speech = sum(&features.speech);
     let loud = 0.7 * sum(&features.loudness);
     let keys = sum(&features.keywords);
-    if keys >= speech.max(loud) && keys > 0.0 {
+    let laughs = sum(&features.laughter);
+    if laughs >= 2.0 * LAUGHTER_BONUS {
+        "Laughter"
+    } else if keys >= speech.max(loud) && keys > 0.0 {
         "Key words"
     } else if loud > speech {
         "Loud, energetic moment"
@@ -271,6 +291,22 @@ mod tests {
         for window in found.windows(2) {
             assert!(window[0].start <= window[1].start, "clips must be returned in timeline order");
         }
+    }
+
+    #[test]
+    fn laughter_raises_the_score() {
+        // Uniform speech and loudness; only 80-90 s has laughter notes.
+        let mut words: Vec<_> = (0..120).map(|t| word(t as f64, "hello")).collect();
+        for t in 80..90 {
+            words[t] = word(t as f64, "(");
+            words.push(word(t as f64 + 0.1, "笑"));
+            words.push(word(t as f64 + 0.2, ")"));
+        }
+        words.sort_by(|a, b| a.start.total_cmp(&b.start));
+        let found = find_highlights(&words, &vec![-25.0; 120], 120.0, 10.0, 1);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].start >= 78.0 && found[0].end <= 92.0, "{:?}", found[0]);
+        assert_eq!(found[0].reason, "Laughter");
     }
 
     #[test]

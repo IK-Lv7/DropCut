@@ -230,6 +230,11 @@ fn is_english_laugh_word(word: &str) -> bool {
         && body.as_bytes().chunks(2).all(|pair| matches!(pair, b"ha" | b"he" | b"hi"))
 }
 
+/// True when `text` contains laughter (a note such as "(笑)" or a spoken laugh).
+pub fn has_laughter(text: &str) -> bool {
+    laughter_to_text(text, "en") != text
+}
+
 /// Replaces laughter in a cue with the internet-style laugh viewers expect:
 /// "www" for Japanese and "lol" for English. `language` is the transcription
 /// language; with "auto" the cue's own script decides.
