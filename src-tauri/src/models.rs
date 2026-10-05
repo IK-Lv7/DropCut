@@ -21,7 +21,7 @@ struct ModelSpec {
     recommended: bool,
 }
 
-const MODELS: [ModelSpec; 5] = [
+const MODELS: [ModelSpec; 6] = [
     ModelSpec {
         id: "tiny",
         name: "Whisper Tiny",
@@ -56,6 +56,15 @@ const MODELS: [ModelSpec; 5] = [
         description: "Highest accuracy, requires more memory",
         size_bytes: 1_533_763_059,
         sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+        recommended: false,
+    },
+    ModelSpec {
+        id: "large-v3",
+        name: "Whisper Large v3",
+        filename: "ggml-large-v3-q5_0.bin",
+        description: "Most accurate for hard audio, 2-3x slower than Turbo (q5_0)",
+        size_bytes: 1_081_140_203,
+        sha256: "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
         recommended: false,
     },
     ModelSpec {

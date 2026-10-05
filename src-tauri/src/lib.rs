@@ -1,4 +1,5 @@
 mod highlight;
+mod laughter;
 mod llm;
 mod models;
 mod reframe;
@@ -294,8 +295,10 @@ async fn probe_video(app: AppHandle, path: String) -> Result<VideoInfo, String> 
         .args([
             "-v",
             "error",
-            "-show_entries",
-            "stream=codec_type,width,height,codec_name,avg_frame_rate:stream_side_data=rotation:stream_tags=rotate:format=duration",
+            // Not -show_entries: the side-data section name differs between
+            // FFmpeg versions, and an unknown name makes ffprobe fail outright.
+            "-show_streams",
+            "-show_format",
             "-of",
             "json",
         ])
@@ -838,6 +841,19 @@ async fn create_subtitles(
             break;
         }
     }
+    // Whisper rarely writes laughter down, so it is also looked for in the audio,
+    // but only where no subtitle exists.
+    let laughs = if cues.is_empty() {
+        Vec::new()
+    } else {
+        let occupied: Vec<(f64, f64)> = cues.iter().map(|cue| (cue.start, cue.end)).collect();
+        tokio::fs::read(&audio_path)
+            .await
+            .ok()
+            .and_then(|bytes| laughter::wav_samples(&bytes))
+            .map(|samples| laughter::find_laughter(&samples, &occupied))
+            .unwrap_or_default()
+    };
     let _ = tokio::fs::remove_dir_all(&work_dir).await;
     if cues.is_empty() {
         return Err("whisper-cli produced an empty SRT file.".into());
@@ -845,6 +861,13 @@ async fn create_subtitles(
     for cue in &mut cues {
         cue.text = subtitles::laughter_to_text(&cue.text, language);
     }
+    let laugh = subtitles::laugh_word(language, &cues);
+    cues.extend(laughs.into_iter().map(|(start, end)| subtitles::Cue {
+        start,
+        end,
+        text: laugh.to_string(),
+    }));
+    cues.sort_by(|a, b| a.start.total_cmp(&b.start));
     tokio::fs::write(&subtitle_path, subtitles::to_srt(&cues))
         .await
         .map_err(|error| friendly_error(&error.to_string()))?;

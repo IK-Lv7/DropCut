@@ -230,6 +230,17 @@ fn is_english_laugh_word(word: &str) -> bool {
         && body.as_bytes().chunks(2).all(|pair| matches!(pair, b"ha" | b"he" | b"hi"))
 }
 
+/// The written laugh for subtitles: "www" for Japanese, "lol" for English.
+/// With "auto" the script of the existing cues decides.
+pub fn laugh_word(language: &str, cues: &[Cue]) -> &'static str {
+    let japanese = match language {
+        "ja" => true,
+        "en" => false,
+        _ => cues.iter().any(|cue| cue.text.chars().any(is_japanese)),
+    };
+    if japanese { "www" } else { "lol" }
+}
+
 /// True when `text` contains laughter (a note such as "(笑)" or a spoken laugh).
 pub fn has_laughter(text: &str) -> bool {
     laughter_to_text(text, "en") != text
