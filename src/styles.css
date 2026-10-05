@@ -84,3 +84,4 @@ footer { margin-top: auto; height: 55px; padding: 0 36px; display: flex; align-i
 .choice-row.four { grid-template-columns: repeat(4, 1fr); }
 .choice-row button { justify-content: center; height: 32px; border: 1px solid #d5d8cc; border-radius: 8px; background: #fff; color: #555; cursor: pointer; }
 .choice-row button.active { color: #fff; border-color: #71804c; background: #71804c; font-weight: 700; }
+.compact-toggle.plain, .compact-toggle.plain.active { min-height: 0; margin-top: 10px; padding: 0; border: 0; background: transparent; }

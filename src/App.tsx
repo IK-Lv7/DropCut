@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -55,6 +56,7 @@ function formatDuration(seconds: number) {
 }
 
 export default function App() {
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [updateStatus, setUpdateStatus] = useState<"idle" | "installing" | "error">("idle");
   const [video, setVideo] = useState<VideoInfo | null>(null);
@@ -198,6 +200,7 @@ export default function App() {
     if (!isTauri()) return;
     // Checking for updates only touches GitHub Releases, never user data, and
     // failures (e.g. offline) are silently ignored since this app works fully offline.
+    getVersion().then(setAppVersion).catch(() => {});
     check().then(setAvailableUpdate).catch(() => {});
     invoke<boolean>("check_llm").then(setLlmReady).catch(() => setLlmReady(false));
     invoke<boolean>("check_ffmpeg").then(setFfmpegReady).catch(() => setFfmpegReady(false));
@@ -650,7 +653,7 @@ export default function App() {
                 ))}
               </div>
               {llmReady && (
-                <button type="button" className={`compact-toggle ${useAi ? "active" : ""}`} onClick={() => setUseAi(!useAi)}>
+                <button type="button" className={`compact-toggle plain ${useAi ? "active" : ""}`} onClick={() => setUseAi(!useAi)}>
                   <span className="mini-switch"><i /></span><span>Use the built-in local AI to pick the best clips (slower, private)</span>
                 </button>
               )}
@@ -895,7 +898,7 @@ export default function App() {
         </div>
       </section>
 
-      <footer><span><HardDrive size={15} /> Local processing</span><span>Free · No watermark · No upload</span><button onClick={() => { setVideo(null); setProgress(null); setError(null); }}><RotateCcw size={14} /> Reset</button></footer>
+      <footer><span><HardDrive size={15} /> Local processing</span><span>Free · No watermark · No upload</span>{appVersion && <span>v{appVersion}</span>}<button onClick={() => { setVideo(null); setProgress(null); setError(null); }}><RotateCcw size={14} /> Reset</button></footer>
     </main>
   );
 }
