@@ -800,9 +800,13 @@ async fn create_subtitles(
     let subtitle_path = output_base.with_extension("srt");
     let whisper_base = work_dir.join("subtitles");
     let log_path = work_dir.join("whisper.log");
-    let mut cues = Vec::new();
+    let mut cues;
+    // DTW times each token where it is actually spoken, so cues appear when the
+    // words are said. It does not work with flash attention, which is turned off.
+    let mut dtw = models::dtw_preset(&model);
     // VAD can classify a quiet or noisy recording as all non-speech; retry without it.
-    for use_vad in [true, false] {
+    let mut use_vad = true;
+    loop {
         let _ = tokio::fs::remove_file(whisper_base.with_extension("json")).await;
         let _ = tokio::fs::remove_file(whisper_base.with_extension("srt")).await;
         let mut transcribe = tools::command(&whisper);
@@ -813,6 +817,9 @@ async fn create_subtitles(
             .arg(&audio_path)
             .args(["-l", language, "-osrt", "-ojf", "-of"])
             .arg(&whisper_base);
+        if let Some(preset) = dtw {
+            transcribe.args(["-nfa", "-dtw", preset]);
+        }
         if let Err(error) = add_accuracy_args(&mut transcribe, &work_dir, use_vad).await {
             let _ = tokio::fs::remove_dir_all(&work_dir).await;
             return Err(error);
@@ -830,6 +837,11 @@ async fn create_subtitles(
                 let _ = tokio::fs::remove_dir_all(&work_dir).await;
                 return Ok(SubtitleResult::Cancelled);
             }
+            // A whisper-cli on PATH may predate `-nfa`/`-dtw`; retry with plain timing.
+            ProcessResult::Completed(status) if !status.success() && dtw.is_some() => {
+                dtw = None;
+                continue;
+            }
             ProcessResult::Completed(status) if !status.success() => {
                 let _ = tokio::fs::remove_dir_all(&work_dir).await;
                 return Err("Local transcription failed. Check the model and try again.".into());
@@ -837,9 +849,10 @@ async fn create_subtitles(
             ProcessResult::Completed(_) => {}
         }
         cues = read_subtitle_cues(&whisper_base, &log_path).await;
-        if !cues.is_empty() {
+        if !cues.is_empty() || !use_vad {
             break;
         }
+        use_vad = false;
     }
     // Whisper rarely writes laughter down, so it is also looked for in the audio,
     // but only where no subtitle exists.

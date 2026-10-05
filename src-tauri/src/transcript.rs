@@ -200,6 +200,7 @@ fn parse_segments(raw: &[u8], vad: &[VadSegment]) -> Result<Vec<Vec<Piece>>, Str
         .as_array()
         .ok_or_else(|| "The transcript could not be read.".to_string())?;
     let mut result = Vec::with_capacity(segments.len());
+    let mut has_dtw = true;
     for segment in segments {
         let mut pieces = Vec::new();
         for token in segment["tokens"].as_array().into_iter().flatten() {
@@ -211,14 +212,29 @@ fn parse_segments(raw: &[u8], vad: &[VadSegment]) -> Result<Vec<Vec<Piece>>, Str
             }
             let from = token["offsets"]["from"].as_f64().unwrap_or(0.0) / 1000.0;
             let to = token["offsets"]["to"].as_f64().unwrap_or(from * 1000.0) / 1000.0;
-            pieces.push(Piece {
-                start: from,
-                end: to.max(from),
-                bytes: token_bytes(text),
-            });
+            // `t_dtw` (centiseconds, -1 when absent) is only written with `--dtw`.
+            match token["t_dtw"].as_f64().filter(|value| *value >= 0.0) {
+                Some(dtw) => {
+                    let start = dtw / 100.0;
+                    pieces.push(Piece {
+                        start,
+                        end: start + (to - from).max(0.0),
+                        bytes: token_bytes(text),
+                    });
+                }
+                None => {
+                    has_dtw = false;
+                    pieces.push(Piece {
+                        start: from,
+                        end: to.max(from),
+                        bytes: token_bytes(text),
+                    });
+                }
+            }
         }
         result.push(pieces);
     }
+    has_dtw &= result.iter().any(|pieces| !pieces.is_empty());
     // A whisper build that already maps token times would report times past
     // the condensed audio; leave those alone instead of mapping twice.
     let condensed_end = vad
@@ -233,7 +249,31 @@ fn parse_segments(raw: &[u8], vad: &[VadSegment]) -> Result<Vec<Vec<Piece>>, Str
             piece.end = map_vad_time(piece.end, vad, false).max(piece.start);
         }
     }
+    if has_dtw {
+        end_dtw_pieces(&mut result, vad);
+    }
     Ok(result)
+}
+
+/// DTW gives each token only its start. A token lasts until the next spoken
+/// token starts, but not past the end of its VAD speech span, so pauses stay
+/// visible. Without VAD, whisper's own token length caps it instead.
+fn end_dtw_pieces(segments: &mut [Vec<Piece>], vad: &[VadSegment]) {
+    let mut next_start = f64::INFINITY;
+    for piece in segments.iter_mut().rev().flat_map(|pieces| pieces.iter_mut().rev()) {
+        let cap = if vad.is_empty() {
+            piece.end
+        } else {
+            vad.iter()
+                .rev()
+                .find(|segment| segment.orig_start <= piece.start + 1e-9)
+                .map_or(piece.end, |segment| segment.orig_end)
+        };
+        piece.end = next_start.min(cap).max(piece.start);
+        if !std::str::from_utf8(&piece.bytes).is_ok_and(is_punctuation_only) {
+            next_start = piece.start;
+        }
+    }
 }
 
 pub fn parse_whisper_json(raw: &[u8], vad: &[VadSegment]) -> Result<Vec<TranscriptWord>, String> {
@@ -257,6 +297,8 @@ const CUE_GAP_SECONDS: f64 = 0.8;
 const MIN_CUE_SECONDS: f64 = 0.8;
 /// Token end times run slightly early, so cues linger briefly after speech.
 const CUE_HOLD_SECONDS: f64 = 0.3;
+/// How far a cue start may move back to the speech onset before it.
+const ONSET_SNAP_SECONDS: f64 = 0.6;
 
 /// Builds subtitle cues timed by the spoken tokens rather than whisper's
 /// segment bounds, which often cover the silence before speech starts.
@@ -285,6 +327,7 @@ pub fn subtitle_cues(raw: &[u8], vad: &[VadSegment]) -> Result<Vec<Cue>, String>
         push_cue(&mut cues, &bytes, start, end);
     }
     cues.sort_by(|a, b| a.start.total_cmp(&b.start));
+    snap_to_speech_onsets(&mut cues, vad);
     for index in 0..cues.len() {
         let next_start = cues.get(index + 1).map_or(f64::INFINITY, |next| next.start);
         let cue = &mut cues[index];
@@ -294,6 +337,26 @@ pub fn subtitle_cues(raw: &[u8], vad: &[VadSegment]) -> Result<Vec<Cue>, String>
     }
     cues.retain(|cue| cue.end > cue.start);
     Ok(cues)
+}
+
+/// Token times (DTW ones especially) land a little after the voice begins.
+/// A cue that starts shortly after a VAD speech onset starts on it instead,
+/// unless the previous cue is still speaking there.
+fn snap_to_speech_onsets(cues: &mut [Cue], vad: &[VadSegment]) {
+    let mut previous_end = f64::NEG_INFINITY;
+    for cue in cues.iter_mut() {
+        if let Some(onset) = vad
+            .iter()
+            .map(|segment| segment.orig_start)
+            .filter(|onset| {
+                *onset <= cue.start && cue.start - onset <= ONSET_SNAP_SECONDS && *onset >= previous_end
+            })
+            .reduce(f64::max)
+        {
+            cue.start = onset;
+        }
+        previous_end = cue.end;
+    }
 }
 
 fn push_cue(cues: &mut Vec<Cue>, bytes: &[u8], start: f64, end: f64) {
@@ -547,9 +610,42 @@ whisper_vad: vad_segment_info: orig_start: 10.08, orig_end: 12.48, vad_start: 2.
         let cues = subtitle_cues(raw, &parse_vad_segments(VAD_LOG)).unwrap();
         let texts: Vec<&str> = cues.iter().map(|cue| cue.text.as_str()).collect();
         assert_eq!(texts, ["Hello there.", "Next line"]);
-        assert!((cues[0].start - 0.39).abs() < 1e-9);
+        // 0.39 is just after the speech onset at 0.29, so it snaps to it.
+        assert!((cues[0].start - 0.29).abs() < 1e-9);
         assert!(cues[0].end <= 2.34 + CUE_HOLD_SECONDS + 1e-9);
         assert!((cues[1].start - 10.08).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dtw_times_place_words_where_they_are_spoken() {
+        // Plain offsets put " Next" inside the first span; DTW puts it in the second.
+        let raw = br#"{"transcription":[
+            {"offsets":{"from":0,"to":4550},"tokens":[
+                {"text":" Hello","offsets":{"from":0,"to":600},"t_dtw":30},
+                {"text":" there","offsets":{"from":600,"to":1200},"t_dtw":90},
+                {"text":".","offsets":{"from":1200,"to":1300},"t_dtw":180},
+                {"text":" Next","offsets":{"from":1300,"to":1700},"t_dtw":240},
+                {"text":" line","offsets":{"from":1700,"to":2300},"t_dtw":300}
+            ]}]}"#;
+        let cues = subtitle_cues(raw, &parse_vad_segments(VAD_LOG)).unwrap();
+        let texts: Vec<&str> = cues.iter().map(|cue| cue.text.as_str()).collect();
+        assert_eq!(texts, ["Hello there.", "Next line"]);
+        assert!((cues[0].start - 0.29).abs() < 1e-9);
+        // The first cue ends with its speech span, not when "Next" starts.
+        assert!((cues[0].end - (2.24 + CUE_HOLD_SECONDS)).abs() < 1e-9);
+        // DTW said 10.33; the onset at 10.08 is close enough to snap to.
+        assert!((cues[1].start - 10.08).abs() < 1e-9);
+    }
+
+    #[test]
+    fn onset_snap_never_reaches_into_the_previous_cue() {
+        let vad = [VadSegment { orig_start: 1.0, orig_end: 5.0, vad_start: 0.0 }];
+        let mut cues = vec![
+            Cue { start: 1.2, end: 2.0, text: "a".into() },
+            Cue { start: 2.1, end: 3.0, text: "b".into() },
+        ];
+        snap_to_speech_onsets(&mut cues, &vad);
+        assert_eq!((cues[0].start, cues[1].start), (1.0, 2.1));
     }
 
     #[test]
