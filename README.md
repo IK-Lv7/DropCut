@@ -4,7 +4,7 @@
 <p align="center">
   <a href="https://github.com/IK-Lv7/DropCut/releases/latest"><img alt="Download for Windows" src="https://img.shields.io/badge/%E2%AC%87%20Download%20for%20Windows-installer-2ea44f?style=for-the-badge&logo=windows&logoColor=white"></a>
 </p>
-<p align="center"><sub>Free · No account · Runs offline · Windows 10/11 (64-bit)</sub></p>
+<p align="center"><sub>Free · No account · Runs offline · Windows 10/11 (64-bit) · <a href="https://ik-lv7.github.io/DropCut/">Website</a></sub></p>
 
 <p align="center">A free, open-source AI video editor that runs 100% on your computer.<br>
 No subscription. No watermark. No upload. No account.</p>
@@ -111,7 +111,7 @@ DropCut は、完全にローカルで動く無料のオープンソース AI �
   <a href="https://github.com/IK-Lv7/DropCut/releases/latest"><img alt="Windows 版をダウンロード" src="https://img.shields.io/badge/%E2%AC%87%20Windows%E7%89%88%E3%82%92%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89-installer-2ea44f?style=for-the-badge&logo=windows&logoColor=white"></a>
 </p>
 
-**インストール方法:** 上のボタンから最新の `setup.exe` をダウンロードして実行。SmartScreen の警告が出たら「詳細情報 → 実行」を選んでください（まだコード署名していません）。
+**インストール方法:** [ダウンロードページ](https://ik-lv7.github.io/DropCut/) または上のボタンから最新の `setup.exe` をダウンロードして実行。SmartScreen の警告が出たら「詳細情報 → 実行」を選んでください（まだコード署名していません）。
 
 - **ワンボタン書き出し**: YouTube、Shorts/TikTok、Discord、X など用途に合わせて出力
 - **自動字幕**: ローカルの Whisper で日本語・英語などに対応。6種類のデザイン
