@@ -12,6 +12,7 @@ import {
   Trash2, Undo2, Upload, Volume2, X, ZoomIn,
 } from "lucide-react";
 import { PRESETS, SUPPORTED_EXTENSIONS } from "./presets";
+import { useLanguage, type Lang } from "./i18n";
 import type {
   Highlight,
   AutoZoomTemplate, CutRange, ExportSettings, ModelDownloadProgress, PresetId, ProgressEvent, Quality,
@@ -56,6 +57,7 @@ function formatDuration(seconds: number) {
 }
 
 export default function App() {
+  const { lang, setLang, t } = useLanguage();
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [updateStatus, setUpdateStatus] = useState<"idle" | "installing" | "error">("idle");
@@ -103,7 +105,7 @@ export default function App() {
   const [subtitlePosition, setSubtitlePosition] = useState<"bottom" | "middle" | "top">("bottom");
   const [subtitleBackground, setSubtitleBackground] = useState<"template" | "on" | "off">("template");
   const [subtitleMaxChars, setSubtitleMaxChars] = useState("");
-  const [shortsNote, setShortsNote] = useState<string | null>(null);
+  const [shortsNotes, setShortsNotes] = useState<string[]>([]);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
   const [subtitleModelPath, setSubtitleModelPath] = useState<string | null>(null);
   const [subtitleLanguage, setSubtitleLanguage] = useState<"auto" | "ja" | "en">("ja");
@@ -432,7 +434,7 @@ export default function App() {
       if (!canCaption) notes.push("Captions were skipped. Download a Whisper model below and turn on Automatic subtitles to add them.");
     }
     notes.push("Filler-word cutting stays optional because it needs a quick review.");
-    setShortsNote(notes.join(" "));
+    setShortsNotes(notes);
   };
 
   const applyWordRange = (from: number, to: number, remove: boolean) => {
@@ -505,8 +507,8 @@ export default function App() {
   };
 
   const deleteModel = async (model: WhisperModel) => {
-    const approved = await confirm(`Remove ${model.name} from this PC? You can download it again later.`, {
-      title: "Remove whisper model",
+    const approved = await confirm(t("Remove {name} from this PC? You can download it again later.", { name: model.name }), {
+      title: t("Remove whisper model"),
       kind: "warning",
     });
     if (!approved) return;
@@ -525,93 +527,100 @@ export default function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand"><span className="brand-mark"><Film size={20} /></span><span>DropCut</span><em>LOCAL</em></div>
-        <div className="privacy"><LockKeyhole size={15} /> Everything stays on this PC</div>
+        <div className="topbar-right">
+          <div className="lang-switch" role="group" aria-label={t("Language")}>
+            {(["en", "ja"] as Lang[]).map((code) => (
+              <button type="button" key={code} className={lang === code ? "active" : ""} aria-pressed={lang === code} onClick={() => setLang(code)}>{code === "en" ? "EN" : "日本語"}</button>
+            ))}
+          </div>
+          <div className="privacy"><LockKeyhole size={15} /> {t("Everything stays on this PC")}</div>
+        </div>
       </header>
 
       {availableUpdate && (
         <div className="update-banner">
-          <span><Download size={15} /> A new version ({availableUpdate.version}) is available.</span>
+          <span><Download size={15} /> {t("A new version ({version}) is available.", { version: availableUpdate.version })}</span>
           <button type="button" disabled={updateStatus === "installing"} onClick={installUpdate}>
-            {updateStatus === "installing" ? "Installing…" : "Update & restart"}
+            {updateStatus === "installing" ? t("Installing…") : t("Update & restart")}
           </button>
-          {updateStatus === "error" && <small>Update failed. Try again later.</small>}
+          {updateStatus === "error" && <small>{t("Update failed. Try again later.")}</small>}
         </div>
       )}
 
       <section className="hero">
-        <div className="eyebrow"><Sparkles size={15} /> SIMPLE VIDEO EXPORT</div>
-        <h1>Make every video fit.</h1>
-        <p>No upload. Choose a video, pick a destination, and export.</p>
+        <div className="eyebrow"><Sparkles size={15} /> {t("SIMPLE VIDEO EXPORT")}</div>
+        <h1>{t("Make every video fit.")}</h1>
+        <p>{t("No upload. Choose a video, pick a destination, and export.")}</p>
       </section>
 
       <section className="workspace">
         {!video ? (
           <button className="dropzone" onClick={chooseVideo} type="button">
             <span className="upload-icon"><Upload size={28} /></span>
-            <strong>Drop a video here</strong>
-            <span>or</span>
-            <b><FolderOpen size={17} /> Choose a video</b>
+            <strong>{t("Drop a video here")}</strong>
+            <span>{t("or")}</span>
+            <b><FolderOpen size={17} /> {t("Choose a video")}</b>
             <small>MP4 · MOV · WebM · MKV · AVI</small>
           </button>
         ) : (
           <div className="video-card">
             <div className="video-thumb"><Film size={30} /></div>
             <div className="video-meta">
-              <span>SELECTED VIDEO</span>
+              <span>{t("SELECTED VIDEO")}</span>
               <strong title={video.path}>{video.name}</strong>
               <p>{formatDuration(video.durationSeconds)} <i /> {video.width}×{video.height} <i /> {formatBytes(video.sizeBytes)}</p>
             </div>
-            {!processing && <button className="icon-button" onClick={() => { setVideo(null); setProgress(null); }} aria-label="Remove video"><X size={19} /></button>}
+            {!processing && <button className="icon-button" onClick={() => { setVideo(null); setProgress(null); }} aria-label={t("Remove video")}><X size={19} /></button>}
           </div>
         )}
         <input id="browser-file" hidden type="file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo" onChange={() => setError("Video processing is available in the desktop app.")} />
 
-        <div className="section-heading"><div><span>01</span><div><h2>Choose edits</h2><p>Optional local processing before export</p></div></div></div>
+        <div className="section-heading"><div><span>01</span><div><h2>{t("Choose edits")}</h2><p>{t("Optional local processing before export")}</p></div></div></div>
         <button className="shorts-preset" type="button" disabled={processing} onClick={applyShortsPreset}>
           <span className="feature-icon"><Sparkles size={21} /></span>
-          <span><strong>Make it a Short</strong><small>Vertical 9:16 · follow faces · trim pauses · clean audio · captions · gentle zoom</small></span>
+          <span><strong>{t("Make it a Short")}</strong><small>{t("Vertical 9:16 · follow faces · trim pauses · clean audio · captions · gentle zoom")}</small></span>
         </button>
-        {shortsNote && <p className="shorts-note">{shortsNote}</p>}
+        {shortsNotes.length > 0 && <p className="shorts-note">{shortsNotes.map((note) => t(note)).join(" ")}</p>}
         <div className={`feature-card ${silenceRemovalEnabled ? "selected" : ""}`}>
           <button className="feature-main" type="button" onClick={() => setSilenceRemovalEnabled(!silenceRemovalEnabled)}>
             <span className="feature-icon"><Scissors size={21} /></span>
-            <span><strong>Remove silence</strong><small>Cut quiet sections while keeping natural pauses</small></span>
+            <span><strong>{t("Remove silence")}</strong><small>{t("Cut quiet sections while keeping natural pauses")}</small></span>
             <span className={`switch ${silenceRemovalEnabled ? "on" : ""}`}><i /></span>
           </button>
           {silenceRemovalEnabled && (
             <div className="feature-settings silence-settings">
-              <span>Cut strength</span>
+              <span>{t("Cut strength")}</span>
               <div className="strength-options">
                 {(["weak", "normal", "strong"] as const).map((strength) => (
-                  <button className={silenceStrength === strength ? "active" : ""} type="button" key={strength} onClick={() => applySilenceStrength(strength)}>{strength[0].toUpperCase() + strength.slice(1)}</button>
+                  <button className={silenceStrength === strength ? "active" : ""} type="button" key={strength} onClick={() => applySilenceStrength(strength)}>{t(strength[0].toUpperCase() + strength.slice(1))}</button>
                 ))}
               </div>
-              <p>Advanced settings let you fine-tune the silence threshold, duration, and retained padding.</p>
+              <p>{t("Advanced settings let you fine-tune the silence threshold, duration, and retained padding.")}</p>
             </div>
           )}
         </div>
         <div className={`feature-card ${transcriptEditEnabled ? "selected" : ""}`}>
           <button className="feature-main" type="button" onClick={() => setTranscriptEditEnabled(!transcriptEditEnabled)}>
             <span className="feature-icon"><MessageSquareText size={21} /></span>
-            <span><strong>Remove filler words · Edit by text</strong><small>Review the transcript, then cut words like “um” or “えーと” from the video</small></span>
+            <span><strong>{t("Remove filler words · Edit by text")}</strong><small>{t("Review the transcript, then cut words like “um” or “えーと” from the video")}</small></span>
             <span className={`switch ${transcriptEditEnabled ? "on" : ""}`}><i /></span>
           </button>
           {transcriptEditEnabled && (
             <div className="transcript-panel">
               <div className="transcript-actions">
-                <button type="button" disabled={!video || processing || !subtitleModelPath || !whisperStatus?.available} onClick={analyzeSpeech}><Search size={14} /> {transcript ? "Analyze again" : "Analyze speech"}</button>
-                {transcript && <button type="button" disabled={processing} onClick={() => setRemovedWords(selectFillers(transcript))}>Select filler words</button>}
-                {transcript && <button type="button" disabled={processing || removedWords.size === 0} onClick={() => setRemovedWords(new Set())}><Undo2 size={14} /> Restore all</button>}
+                <button type="button" disabled={!video || processing || !subtitleModelPath || !whisperStatus?.available} onClick={analyzeSpeech}><Search size={14} /> {transcript ? t("Analyze again") : t("Analyze speech")}</button>
+                {transcript && <button type="button" disabled={processing} onClick={() => setRemovedWords(selectFillers(transcript))}>{t("Select filler words")}</button>}
+                {transcript && <button type="button" disabled={processing || removedWords.size === 0} onClick={() => setRemovedWords(new Set())}><Undo2 size={14} /> {t("Restore all")}</button>}
               </div>
-              {!video && <p>Choose a video first.</p>}
-              {video && !subtitleModelPath && <p>Download a Whisper model below to analyze speech.</p>}
+              {!video && <p>{t("Choose a video first.")}</p>}
+              {video && !subtitleModelPath && <p>{t("Download a Whisper model below to analyze speech.")}</p>}
               {!transcript ? (
-                <p>Analysis runs locally and cuts nothing yet. Removed words are cut when you create the video.</p>
+                <p>{t("Analysis runs locally and cuts nothing yet. Removed words are cut when you create the video.")}</p>
               ) : (
                 <>
-                  <p className="transcript-summary"><strong>{fillerCount}</strong> filler {fillerCount === 1 ? "word" : "words"} found · <strong>{removedWords.size}</strong> removed ({removedSeconds.toFixed(1)}s)</p>
+                  <p className="transcript-summary">{t(fillerCount === 1 ? "{count} filler word found · {removed} removed ({seconds}s)" : "{count} filler words found · {removed} removed ({seconds}s)", { count: fillerCount, removed: removedWords.size, seconds: removedSeconds.toFixed(1) })}</p>
                   <div className="transcript-words" lang={subtitleLanguage === "auto" ? undefined : subtitleLanguage}>
-                    {transcript.length === 0 && <span>No speech was found.</span>}
+                    {transcript.length === 0 && <span>{t("No speech was found.")}</span>}
                     {transcript.map((word, index) => (
                       <Fragment key={index}>
                         <button
@@ -626,7 +635,7 @@ export default function App() {
                       </Fragment>
                     ))}
                   </div>
-                  <p>Click a word, or drag across several, to remove or restore them — like editing text. Red-highlighted words are hesitations; amber ones can be real speech, so they start unchecked.</p>
+                  <p>{t("Click a word, or drag across several, to remove or restore them — like editing text. Red-highlighted words are hesitations; amber ones can be real speech, so they start unchecked.")}</p>
                 </>
               )}
             </div>
@@ -635,33 +644,33 @@ export default function App() {
         <div className={`feature-card ${highlightEnabled ? "selected" : ""}`}>
           <button className="feature-main" type="button" onClick={() => setHighlightEnabled(!highlightEnabled)}>
             <span className="feature-icon"><Flame size={21} /></span>
-            <span><strong>Find highlights</strong><small>Keep only the most engaging moments of a long video</small></span>
+            <span><strong>{t("Find highlights")}</strong><small>{t("Keep only the most engaging moments of a long video")}</small></span>
             <span className={`switch ${highlightEnabled ? "on" : ""}`}><i /></span>
           </button>
           {highlightEnabled && (
             <div className="transcript-panel">
-              <span className="option-label">Clip length</span>
+              <span className="option-label">{t("Clip length")}</span>
               <div className="strength-options choice-row four">
                 {[15, 30, 60, 90].map((seconds) => (
                   <button className={highlightLength === seconds ? "active" : ""} type="button" key={seconds} onClick={() => setHighlightLength(seconds)}>{seconds}s</button>
                 ))}
               </div>
-              <span className="option-label">Number of clips</span>
+              <span className="option-label">{t("Number of clips")}</span>
               <div className="strength-options choice-row">
                 {[1, 3, 5].map((count) => (
-                  <button className={highlightCount === count ? "active" : ""} type="button" key={count} onClick={() => setHighlightCount(count)}>{count} {count === 1 ? "clip" : "clips"}</button>
+                  <button className={highlightCount === count ? "active" : ""} type="button" key={count} onClick={() => setHighlightCount(count)}>{t(count === 1 ? "{count} clip" : "{count} clips", { count })}</button>
                 ))}
               </div>
               {llmReady && (
                 <button type="button" className={`compact-toggle plain ${useAi ? "active" : ""}`} onClick={() => setUseAi(!useAi)}>
-                  <span className="mini-switch"><i /></span><span>Use the built-in local AI to pick the best clips (slower, private)</span>
+                  <span className="mini-switch"><i /></span><span>{t("Use the built-in local AI to pick the best clips (slower, private)")}</span>
                 </button>
               )}
               <div className="transcript-actions">
-                <button type="button" disabled={!video || processing || !subtitleModelPath || !whisperStatus?.available} onClick={findHighlights}><Search size={14} /> {highlights ? "Search again" : "Find highlights"}</button>
+                <button type="button" disabled={!video || processing || !subtitleModelPath || !whisperStatus?.available} onClick={findHighlights}><Search size={14} /> {highlights ? t("Search again") : t("Find highlights")}</button>
               </div>
-              {!video && <p>Choose a video first.</p>}
-              {video && !subtitleModelPath && <p>Download a Whisper model below to find highlights.</p>}
+              {!video && <p>{t("Choose a video first.")}</p>}
+              {video && !subtitleModelPath && <p>{t("Download a Whisper model below to find highlights.")}</p>}
               {highlights && highlights.length > 0 && (
                 <>
                   <div className="highlight-list">
@@ -671,100 +680,100 @@ export default function App() {
                         <button type="button" key={index} disabled={processing} aria-pressed={picked} className={`highlight-item ${picked ? "picked" : ""}`} onClick={() => togglePickedHighlight(index)}>
                           <span className="highlight-check">{picked ? "✓" : ""}</span>
                           <span className="highlight-thumb">{highlightThumbnails[index] ? <img src={highlightThumbnails[index]} alt="" /> : <Film size={16} />}</span>
-                          <span className="highlight-body"><strong>#{index + 1} · {formatDuration(clip.start)} – {formatDuration(clip.end)}</strong><small>{clip.reason} · {Math.round(clip.end - clip.start)}s</small></span>
-                          <span className="highlight-state">{picked ? "Selected" : "Not used"}</span>
+                          <span className="highlight-body"><strong>#{index + 1} · {formatDuration(clip.start)} – {formatDuration(clip.end)}</strong><small>{t(clip.reason)} · {Math.round(clip.end - clip.start)}s</small></span>
+                          <span className="highlight-state">{picked ? t("Selected") : t("Not used")}</span>
                         </button>
                       );
                     })}
                   </div>
-                  <p className="transcript-summary"><strong>{pickedHighlights.size}</strong> of {highlights.length} selected · {formatDuration(highlights.filter((_, i) => pickedHighlights.has(i)).reduce((t, c) => t + c.end - c.start, 0))} in the final video</p>
+                  <p className="transcript-summary">{t("{picked} of {total} selected · {duration} in the final video", { picked: pickedHighlights.size, total: highlights.length, duration: formatDuration(highlights.filter((_, i) => pickedHighlights.has(i)).reduce((sum, c) => sum + c.end - c.start, 0)) })}</p>
                 </>
               )}
-              {highlights && highlights.length > 0 && <p>{aiUsed ? "Ranked with the built-in local AI model." : "Ranked by speech, loudness and keywords."}</p>}
-              <p>Analysis runs locally. Checked clips are joined in time order when you create the video; nothing else is kept.</p>
+              {highlights && highlights.length > 0 && <p>{aiUsed ? t("Ranked with the built-in local AI model.") : t("Ranked by speech, loudness and keywords.")}</p>}
+              <p>{t("Analysis runs locally. Checked clips are joined in time order when you create the video; nothing else is kept.")}</p>
             </div>
           )}
         </div>
         <div className={`feature-card ${noiseReductionEnabled ? "selected" : ""}`}>
           <button className="feature-main" type="button" onClick={() => setNoiseReductionEnabled(!noiseReductionEnabled)}>
             <span className="feature-icon"><AudioWaveform size={21} /></span>
-            <span><strong>Reduce noise</strong><small>Soften background hiss and hum in the voice track</small></span>
+            <span><strong>{t("Reduce noise")}</strong><small>{t("Soften background hiss and hum in the voice track")}</small></span>
             <span className={`switch ${noiseReductionEnabled ? "on" : ""}`}><i /></span>
           </button>
           {noiseReductionEnabled && (
             <div className="feature-settings silence-settings">
-              <span>Reduction strength</span>
+              <span>{t("Reduction strength")}</span>
               <div className="strength-options">
                 {(["weak", "normal", "strong"] as const).map((strength) => (
-                  <button className={noiseStrength === strength ? "active" : ""} type="button" key={strength} onClick={() => setNoiseStrength(strength)}>{strength[0].toUpperCase() + strength.slice(1)}</button>
+                  <button className={noiseStrength === strength ? "active" : ""} type="button" key={strength} onClick={() => setNoiseStrength(strength)}>{t(strength[0].toUpperCase() + strength.slice(1))}</button>
                 ))}
               </div>
-              <p>Strong settings remove more noise but can make voices sound thin.</p>
+              <p>{t("Strong settings remove more noise but can make voices sound thin.")}</p>
             </div>
           )}
         </div>
         <div className={`feature-card ${audioNormalizationEnabled ? "selected" : ""}`}>
           <button className="feature-main" type="button" onClick={() => setAudioNormalizationEnabled(!audioNormalizationEnabled)}>
             <span className="feature-icon"><Volume2 size={21} /></span>
-            <span><strong>Normalize audio</strong><small>Balance loudness for comfortable playback</small></span>
+            <span><strong>{t("Normalize audio")}</strong><small>{t("Balance loudness for comfortable playback")}</small></span>
             <span className={`switch ${audioNormalizationEnabled ? "on" : ""}`}><i /></span>
           </button>
         </div>
         <div className={`feature-card ${reframeEnabled ? "selected" : ""}`}>
           <button className="feature-main" type="button" onClick={() => { setReframeEnabled(!reframeEnabled); if (!reframeEnabled && (preset === "youtube" || preset === "x")) setPreset("shorts"); }}>
             <span className="feature-icon"><Smartphone size={21} /></span>
-            <span><strong>Vertical 9:16 · follow faces</strong><small>Crop a landscape video to portrait and keep the speaker in frame</small></span>
+            <span><strong>{t("Vertical 9:16 · follow faces")}</strong><small>{t("Crop a landscape video to portrait and keep the speaker in frame")}</small></span>
             <span className={`switch ${reframeEnabled ? "on" : ""}`}><i /></span>
           </button>
           {reframeEnabled && (
             <div className="feature-settings">
-              <p className="tool-ready">{alreadyPortrait ? "This video is already vertical, so it will not be cropped." : "Faces are found on this PC and the crop follows them smoothly. Without a face, the crop stays centered."}</p>
+              <p className="tool-ready">{alreadyPortrait ? t("This video is already vertical, so it will not be cropped.") : t("Faces are found on this PC and the crop follows them smoothly. Without a face, the crop stays centered.")}</p>
             </div>
           )}
         </div>
         <div className={`feature-card ${autoZoom !== "none" ? "selected" : ""}`}>
           <button className="feature-main" type="button" onClick={() => setAutoZoom(autoZoom === "none" ? "natural" : "none")}>
             <span className="feature-icon"><ZoomIn size={21} /></span>
-            <span><strong>Auto zoom</strong><small>Add a light, regular push-in so the video feels less static</small></span>
+            <span><strong>{t("Auto zoom")}</strong><small>{t("Add a light, regular push-in so the video feels less static")}</small></span>
             <span className={`switch ${autoZoom !== "none" ? "on" : ""}`}><i /></span>
           </button>
           {autoZoom !== "none" && (
             <div className="feature-settings silence-settings">
-              <span>Zoom style</span>
+              <span>{t("Zoom style")}</span>
               <div className="strength-options">
                 {ZOOM_TEMPLATES.map((item) => (
-                  <button className={autoZoom === item.id ? "active" : ""} type="button" key={item.id} title={item.hint} onClick={() => setAutoZoom(item.id)}>{item.label}</button>
+                  <button className={autoZoom === item.id ? "active" : ""} type="button" key={item.id} title={t(item.hint)} onClick={() => setAutoZoom(item.id)}>{t(item.label)}</button>
                 ))}
               </div>
-              <p>Zoom never exceeds 12% and returns to 100% between pushes.</p>
+              <p>{t("Zoom never exceeds 12% and returns to 100% between pushes.")}</p>
             </div>
           )}
         </div>
         <div className={`feature-card ${subtitlesEnabled ? "selected" : ""}`}>
           <button className="feature-main" type="button" onClick={() => setSubtitlesEnabled(!subtitlesEnabled)}>
             <span className="feature-icon"><Captions size={21} /></span>
-            <span><strong>Automatic subtitles</strong><small>Create an SRT file with local whisper.cpp</small></span>
+            <span><strong>{t("Automatic subtitles")}</strong><small>{t("Create an SRT file with local whisper.cpp")}</small></span>
             <span className={`switch ${subtitlesEnabled ? "on" : ""}`}><i /></span>
           </button>
           {subtitlesEnabled && (
             <div className="feature-settings">
-              <label className="burn-in-field">Video subtitles<button className={`compact-toggle ${burnInSubtitles ? "active" : ""}`} type="button" disabled={burnInAvailable === false} onClick={() => setBurnInSubtitles(!burnInSubtitles)}><span className="mini-switch"><i /></span>{burnInAvailable === false ? "SRT only (FFmpeg lacks libass)" : burnInSubtitles ? "Burn into video + SRT" : "SRT file only"}</button></label>
+              <label className="burn-in-field">{t("Video subtitles")}<button className={`compact-toggle ${burnInSubtitles ? "active" : ""}`} type="button" disabled={burnInAvailable === false} onClick={() => setBurnInSubtitles(!burnInSubtitles)}><span className="mini-switch"><i /></span>{burnInAvailable === false ? t("SRT only (FFmpeg lacks libass)") : burnInSubtitles ? t("Burn into video + SRT") : t("SRT file only")}</button></label>
               <div className="strength-options template-options">
                 {SUBTITLE_TEMPLATES.map((item) => (
-                  <button className={subtitleTemplate === item.id ? "active" : ""} type="button" key={item.id} onClick={() => setSubtitleTemplate(item.id)}>{item.label}</button>
+                  <button className={subtitleTemplate === item.id ? "active" : ""} type="button" key={item.id} onClick={() => setSubtitleTemplate(item.id)}>{t(item.label)}</button>
                 ))}
               </div>
-              <p>Styled captions are also saved next to the video as an .ass file.</p>
+              <p>{t("Styled captions are also saved next to the video as an .ass file.")}</p>
             </div>
           )}
         </div>
         {(subtitlesEnabled || transcriptEditEnabled || highlightEnabled) && (
           <div className="feature-card selected">
             <div className="feature-settings">
-              <label>Spoken language<select value={subtitleLanguage} onChange={(event) => setSubtitleLanguage(event.target.value as "auto" | "ja" | "en")}><option value="ja">Japanese</option><option value="en">English</option><option value="auto">Auto detect</option></select></label>
-              <p className={whisperStatus?.available ? "tool-ready" : "tool-missing"}>{whisperStatus?.available ? `Ready: ${whisperStatus.executable}` : "whisper-cli is not available on PATH"}</p>
+              <label>{t("Spoken language")}<select value={subtitleLanguage} onChange={(event) => setSubtitleLanguage(event.target.value as "auto" | "ja" | "en")}><option value="ja">{t("Japanese")}</option><option value="en">{t("English")}</option><option value="auto">{t("Auto detect")}</option></select></label>
+              <p className={whisperStatus?.available ? "tool-ready" : "tool-missing"}>{whisperStatus?.available ? t("Ready: {path}", { path: whisperStatus.executable ?? "" }) : t("whisper-cli is not available on PATH")}</p>
               <div className="model-manager">
-                <div className="model-manager-title"><strong>Whisper model</strong><span>Downloaded only when you choose one</span></div>
+                <div className="model-manager-title"><strong>{t("Whisper model")}</strong><span>{t("Downloaded only when you choose one")}</span></div>
                 <div className="model-list">
                   {whisperModels.map((model) => {
                     const selected = model.path === subtitleModelPath;
@@ -772,14 +781,14 @@ export default function App() {
                     return (
                       <div className={`model-row ${selected ? "selected" : ""}`} key={model.id}>
                         <button className="model-info" type="button" disabled={!model.installed} onClick={() => model.path && setSubtitleModelPath(model.path)}>
-                          <span><strong>{model.name}{model.recommended && <em>RECOMMENDED</em>}</strong><small>{model.description} · {formatBytes(model.sizeBytes)}</small></span>
+                          <span><strong>{model.name}{model.recommended && <em>{t("RECOMMENDED")}</em>}</strong><small>{t(model.description)} · {formatBytes(model.sizeBytes)}</small></span>
                         </button>
                         {downloading ? (
-                          <button className="model-action cancel" type="button" onClick={() => cancelModelDownload(model.id)}><X size={14} /> Cancel</button>
+                          <button className="model-action cancel" type="button" onClick={() => cancelModelDownload(model.id)}><X size={14} /> {t("Cancel")}</button>
                         ) : model.installed ? (
-                          <button className="model-action remove" type="button" disabled={processing} aria-label={`Remove ${model.name}`} onClick={() => deleteModel(model)}><Trash2 size={14} /></button>
+                          <button className="model-action remove" type="button" disabled={processing} aria-label={t("Remove {name}", { name: model.name })} onClick={() => deleteModel(model)}><Trash2 size={14} /></button>
                         ) : (
-                          <button className="model-action" type="button" disabled={downloadingModelId !== null} onClick={() => downloadModel(model.id)}><Download size={14} /> Download</button>
+                          <button className="model-action" type="button" disabled={downloadingModelId !== null} onClick={() => downloadModel(model.id)}><Download size={14} /> {t("Download")}</button>
                         )}
                       </div>
                     );
@@ -787,118 +796,118 @@ export default function App() {
                 </div>
                 {downloadingModelId && modelProgress?.modelId === downloadingModelId && (
                   <div className="model-download-progress">
-                    <div><span>{modelProgress.message}</span><strong>{Math.round(modelProgress.percent)}%</strong></div>
+                    <div><span>{t(modelProgress.message)}</span><strong>{Math.round(modelProgress.percent)}%</strong></div>
                     <div className="progress-track"><span style={{ width: `${modelProgress.percent}%` }} /></div>
                     <small>{formatBytes(modelProgress.downloadedBytes)} / {formatBytes(modelProgress.totalBytes)}</small>
                   </div>
                 )}
-                <button className="custom-model-button" type="button" onClick={chooseSubtitleModel}><FolderOpen size={14} /> Use a custom local .bin model</button>
+                <button className="custom-model-button" type="button" onClick={chooseSubtitleModel}><FolderOpen size={14} /> {t("Use a custom local .bin model")}</button>
               </div>
             </div>
           </div>
         )}
 
-        <div className="section-heading"><div><span>02</span><div><h2>Choose a destination</h2><p>DropCut applies sensible settings automatically</p></div></div></div>
+        <div className="section-heading"><div><span>02</span><div><h2>{t("Choose a destination")}</h2><p>{t("DropCut applies sensible settings automatically")}</p></div></div></div>
         <div className="preset-grid">
           {PRESETS.map((item) => (
             <button key={item.id} className={`preset-card ${preset === item.id ? "selected" : ""}`} onClick={() => { setPreset(item.id); if (item.id === "custom") setAdvanced(true); if (reframeEnabled && (item.id === "youtube" || item.id === "x")) setReframeEnabled(false); }} type="button">
               <span className="radio">{preset === item.id && <span />}</span>
-              <strong>{item.label}</strong>
-              <small>{item.hint}</small>
+              <strong>{t(item.label)}</strong>
+              <small>{t(item.hint)}</small>
               {item.ratio && <em>{item.ratio}</em>}
             </button>
           ))}
         </div>
 
         {preset === "discord" && (
-          <div className="size-row"><span>Maximum file size</span><div>{[10, 25, 50, 100].map((size) => <button className={maxSizeMb === size ? "active" : ""} onClick={() => setMaxSizeMb(size)} key={size}>{size} MB</button>)}</div></div>
+          <div className="size-row"><span>{t("Maximum file size")}</span><div>{[10, 25, 50, 100].map((size) => <button className={maxSizeMb === size ? "active" : ""} onClick={() => setMaxSizeMb(size)} key={size}>{size} MB</button>)}</div></div>
         )}
 
-        <div className="section-heading"><div><span>03</span><div><h2>Choose quality</h2><p>Recommended works well for most videos</p></div></div></div>
+        <div className="section-heading"><div><span>03</span><div><h2>{t("Choose quality")}</h2><p>{t("Recommended works well for most videos")}</p></div></div></div>
         <div className="quality-row">
           {(["small", "recommended", "high"] as Quality[]).map((value) => (
             <button key={value} className={quality === value ? "selected" : ""} onClick={() => setQuality(value)}>
               <span className="radio">{quality === value && <span />}</span>
-              <strong>{value === "small" ? "Smaller file" : value === "recommended" ? "Recommended" : "High quality"}</strong>
-              {value === "recommended" && <em>BEST</em>}
+              <strong>{t(value === "small" ? "Smaller file" : value === "recommended" ? "Recommended" : "High quality")}</strong>
+              {value === "recommended" && <em>{t("BEST")}</em>}
             </button>
           ))}
         </div>
 
-        <button className="advanced-toggle" onClick={() => setAdvanced(!advanced)}><Settings2 size={17} /> Advanced settings <ChevronDown className={advanced ? "turned" : ""} size={17} /></button>
+        <button className="advanced-toggle" onClick={() => setAdvanced(!advanced)}><Settings2 size={17} /> {t("Advanced settings")} <ChevronDown className={advanced ? "turned" : ""} size={17} /></button>
         {advanced && (
           <div className="advanced-panel">
             {silenceRemovalEnabled && (
               <div className="advanced-group">
-                <strong>Silence removal</strong>
+                <strong>{t("Silence removal")}</strong>
                 <div className="custom-grid silence-advanced-grid">
-                  <label>Threshold<input type="number" min="-60" max="-10" step="1" value={silenceThresholdDb} onChange={(event) => { setSilenceStrength("custom"); setSilenceThresholdDb(Number(event.target.value)); }} /><small>dB</small></label>
-                  <label>Minimum silence<input type="number" min="0.1" max="10" step="0.1" value={minimumSilenceDuration} onChange={(event) => { setSilenceStrength("custom"); setMinimumSilenceDuration(Number(event.target.value)); }} /><small>sec</small></label>
-                  <label>Padding<input type="number" min="0" max="2" step="0.05" value={silencePadding} onChange={(event) => { setSilenceStrength("custom"); setSilencePadding(Number(event.target.value)); }} /><small>sec</small></label>
+                  <label>{t("Threshold")}<input type="number" min="-60" max="-10" step="1" value={silenceThresholdDb} onChange={(event) => { setSilenceStrength("custom"); setSilenceThresholdDb(Number(event.target.value)); }} /><small>dB</small></label>
+                  <label>{t("Minimum silence")}<input type="number" min="0.1" max="10" step="0.1" value={minimumSilenceDuration} onChange={(event) => { setSilenceStrength("custom"); setMinimumSilenceDuration(Number(event.target.value)); }} /><small>{t("sec")}</small></label>
+                  <label>{t("Padding")}<input type="number" min="0" max="2" step="0.05" value={silencePadding} onChange={(event) => { setSilenceStrength("custom"); setSilencePadding(Number(event.target.value)); }} /><small>{t("sec")}</small></label>
                 </div>
               </div>
             )}
             {subtitlesEnabled && (
               <div className="advanced-group">
-                <strong>Subtitle style</strong>
+                <strong>{t("Subtitle style")}</strong>
                 <div className="custom-grid silence-advanced-grid">
-                  <label>Font<select value={subtitleFont} onChange={(event) => setSubtitleFont(event.target.value)}><option value="">Auto</option>{SUBTITLE_FONTS.map((font) => <option key={font} value={font}>{font}</option>)}</select></label>
-                  <label>Size<input type="number" min="2" max="12" step="0.5" placeholder="Auto" value={subtitleSize} onChange={(event) => setSubtitleSize(event.target.value)} /><small>%</small></label>
-                  <label>Position<select value={subtitlePosition} onChange={(event) => setSubtitlePosition(event.target.value as "bottom" | "middle" | "top")}><option value="bottom">Bottom</option><option value="middle">Middle</option><option value="top">Top</option></select></label>
-                  <label>Stroke<input type="number" min="0" max="10" step="0.5" placeholder="Auto" value={subtitleOutline} onChange={(event) => setSubtitleOutline(event.target.value)} /><small>px</small></label>
-                  <label>Shadow<input type="number" min="0" max="8" step="0.5" placeholder="Auto" value={subtitleShadow} onChange={(event) => setSubtitleShadow(event.target.value)} /><small>px</small></label>
-                  <label>Background<select value={subtitleBackground} onChange={(event) => setSubtitleBackground(event.target.value as "template" | "on" | "off")}><option value="template">Style default</option><option value="on">Box</option><option value="off">None</option></select></label>
-                  <label>Line length<input type="number" min="6" max="60" step="1" placeholder="Auto" value={subtitleMaxChars} onChange={(event) => setSubtitleMaxChars(event.target.value)} /><small>chars</small></label>
+                  <label>{t("Font")}<select value={subtitleFont} onChange={(event) => setSubtitleFont(event.target.value)}><option value="">{t("Auto")}</option>{SUBTITLE_FONTS.map((font) => <option key={font} value={font}>{font}</option>)}</select></label>
+                  <label>{t("Size")}<input type="number" min="2" max="12" step="0.5" placeholder={t("Auto")} value={subtitleSize} onChange={(event) => setSubtitleSize(event.target.value)} /><small>%</small></label>
+                  <label>{t("Position")}<select value={subtitlePosition} onChange={(event) => setSubtitlePosition(event.target.value as "bottom" | "middle" | "top")}><option value="bottom">{t("Bottom")}</option><option value="middle">{t("Middle")}</option><option value="top">{t("Top")}</option></select></label>
+                  <label>{t("Stroke")}<input type="number" min="0" max="10" step="0.5" placeholder={t("Auto")} value={subtitleOutline} onChange={(event) => setSubtitleOutline(event.target.value)} /><small>px</small></label>
+                  <label>{t("Shadow")}<input type="number" min="0" max="8" step="0.5" placeholder={t("Auto")} value={subtitleShadow} onChange={(event) => setSubtitleShadow(event.target.value)} /><small>px</small></label>
+                  <label>{t("Background")}<select value={subtitleBackground} onChange={(event) => setSubtitleBackground(event.target.value as "template" | "on" | "off")}><option value="template">{t("Style default")}</option><option value="on">{t("Box")}</option><option value="off">{t("None")}</option></select></label>
+                  <label>{t("Line length")}<input type="number" min="6" max="60" step="1" placeholder={t("Auto")} value={subtitleMaxChars} onChange={(event) => setSubtitleMaxChars(event.target.value)} /><small>{t("chars")}</small></label>
                 </div>
               </div>
             )}
             {audioNormalizationEnabled && (
               <div className="advanced-group">
-                <strong>Audio normalization</strong>
+                <strong>{t("Audio normalization")}</strong>
                 <div className="custom-grid audio-advanced-grid">
-                  <label>Target loudness<input type="number" min="-24" max="-5" step="0.5" value={targetLufs} onChange={(event) => setTargetLufs(Number(event.target.value))} /><small>LUFS</small></label>
-                  <label>Loudness range<input type="number" min="1" max="20" step="1" value={loudnessRange} onChange={(event) => setLoudnessRange(Number(event.target.value))} /><small>LU</small></label>
-                  <label>True peak<input type="number" min="-9" max="0" step="0.1" value={truePeakDb} onChange={(event) => setTruePeakDb(Number(event.target.value))} /><small>dB</small></label>
+                  <label>{t("Target loudness")}<input type="number" min="-24" max="-5" step="0.5" value={targetLufs} onChange={(event) => setTargetLufs(Number(event.target.value))} /><small>LUFS</small></label>
+                  <label>{t("Loudness range")}<input type="number" min="1" max="20" step="1" value={loudnessRange} onChange={(event) => setLoudnessRange(Number(event.target.value))} /><small>LU</small></label>
+                  <label>{t("True peak")}<input type="number" min="-9" max="0" step="0.1" value={truePeakDb} onChange={(event) => setTruePeakDb(Number(event.target.value))} /><small>dB</small></label>
                 </div>
               </div>
             )}
             {preset === "custom" ? (
               <div className="custom-grid">
-                <label>Width<input type="number" min="240" max="7680" value={customWidth} onChange={(event) => setCustomWidth(Number(event.target.value))} /><small>px</small></label>
-                <label>Height<input type="number" min="240" max="4320" value={customHeight} onChange={(event) => setCustomHeight(Number(event.target.value))} /><small>px</small></label>
+                <label>{t("Width")}<input type="number" min="240" max="7680" value={customWidth} onChange={(event) => setCustomWidth(Number(event.target.value))} /><small>px</small></label>
+                <label>{t("Height")}<input type="number" min="240" max="4320" value={customHeight} onChange={(event) => setCustomHeight(Number(event.target.value))} /><small>px</small></label>
                 <label>FPS<input type="number" min="1" max="120" value={customFps} onChange={(event) => setCustomFps(Number(event.target.value))} /></label>
-                <label>Codec<select value={customCodec} onChange={(event) => setCustomCodec(event.target.value as "h264" | "h265")}><option value="h264">H.264 (compatible)</option><option value="h265">H.265 (smaller)</option></select></label>
-                <label className="wide">Video bitrate<input type="number" min="100" max="100000" step="100" value={customBitrate} onChange={(event) => setCustomBitrate(Number(event.target.value))} /><small>kbps</small></label>
+                <label>{t("Codec")}<select value={customCodec} onChange={(event) => setCustomCodec(event.target.value as "h264" | "h265")}><option value="h264">{t("H.264 (compatible)")}</option><option value="h265">{t("H.265 (smaller)")}</option></select></label>
+                <label className="wide">{t("Video bitrate")}<input type="number" min="100" max="100000" step="100" value={customBitrate} onChange={(event) => setCustomBitrate(Number(event.target.value))} /><small>kbps</small></label>
               </div>
             ) : (
               <>
-                <div><label>Output format</label><span>MP4 (H.264 / AAC)</span></div>
-                <div><label>Output size</label><span>{selectedPreset.hint}</span></div>
+                <div><label>{t("Output format")}</label><span>MP4 (H.264 / AAC)</span></div>
+                <div><label>{t("Output size")}</label><span>{t(selectedPreset.hint)}</span></div>
               </>
             )}
           </div>
         )}
 
-        {error && <div className="error-box"><X size={18} /><span>{error}</span></div>}
+        {error && <div className="error-box"><X size={18} /><span>{t(error)}</span></div>}
         {progress && (
           <div className={`progress-card ${progress.stage}`}>
-            <div><strong>{progress.message}</strong><span>{Math.round(progress.percent)}%</span></div>
+            <div><strong>{t(progress.message)}</strong><span>{Math.round(progress.percent)}%</span></div>
             <div className="progress-track"><span style={{ width: `${progress.percent}%` }} /></div>
-            {progress.outputPath && <small title={progress.outputPath}>Saved to: {progress.outputPath}</small>}
+            {progress.outputPath && <small title={progress.outputPath}>{t("Saved to: {path}", { path: progress.outputPath })}</small>}
           </div>
         )}
 
         <div className="action-area">
           {processing ? (
-            <button className="cancel-button" onClick={cancel}><X size={18} /> Cancel processing</button>
+            <button className="cancel-button" onClick={cancel}><X size={18} /> {t("Cancel processing")}</button>
           ) : (
-            <button className="export-button" disabled={!video} onClick={exportVideo}><Sparkles size={19} /> Create video</button>
+            <button className="export-button" disabled={!video} onClick={exportVideo}><Sparkles size={19} /> {t("Create video")}</button>
           )}
-          <p><ShieldCheck size={15} /> Your original video is never modified</p>
+          <p><ShieldCheck size={15} /> {t("Your original video is never modified")}</p>
         </div>
       </section>
 
-      <footer><span><HardDrive size={15} /> Local processing</span><span>Free · No watermark · No upload</span>{appVersion && <span>v{appVersion}</span>}<button onClick={() => { setVideo(null); setProgress(null); setError(null); }}><RotateCcw size={14} /> Reset</button></footer>
+      <footer><span><HardDrive size={15} /> {t("Local processing")}</span><span>{t("Free · No watermark · No upload")}</span>{appVersion && <span>v{appVersion}</span>}<button onClick={() => { setVideo(null); setProgress(null); setError(null); }}><RotateCcw size={14} /> {t("Reset")}</button></footer>
     </main>
   );
 }

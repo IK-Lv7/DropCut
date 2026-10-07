@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "dropcut"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
