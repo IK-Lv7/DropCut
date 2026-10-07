@@ -54,7 +54,7 @@ jobs:
 
       - name: Cache pinned local processing tools
         id: tools-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             src-tauri/resources/tools
